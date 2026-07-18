@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""
+Self-Duplication Injection Attack — 30 篇测试
+
+核心：复制 essay 已有句子插入到其他位置，语义连贯难以被模型检测。
+
+搜索策略（对齐统一搜索策略）：
+  - 每步候选数 = 16
+  - beam=1, 迭代上限30, delta>=0.1才停
+"""
+import sys, json, time, os, shutil, random, re
+sys.path.insert(0, "/root/autodl-tmp/robust_text_scoring")
+import torch
+import pandas as pd
+from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
+
+OUT_DIR = "/root/autodl-tmp/aes_final_run"
+RESULT_FILE = os.path.join(OUT_DIR, "injection_self_dup_30_result.json")
+PROGRESS_FILE = os.path.join(OUT_DIR, "injection_self_dup_30_progress.json")
+
+N_ESSAYS = 30
+N_STEPS = 30
+MAX_CANDIDATES = 16   # 每步最多 16 个候选
+THRESHOLD = 0.1
+
+
+def split_sentences(text: str):
+    """Split text into sentences."""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s for s in sentences if s.strip()]
+
+
+def build_candidates(text: str):
+    """
+    Self-duplication: 复制 essay 已有句子，插入到其他位置。
+
+    候选构建：
+      - 选 source 句：所有句子（每个句子都可被复制）
+      - 选 dest 位置：所有句子边界（插在句子之前），排除与 source 相邻的位置
+      - 16 候选 = 4 source × 4 dest 位置（随机采样）
+    """
+    sentences = split_sentences(text)
+    n = len(sentences)
+    if n < 2:
+        return []
+
+    # 所有可作为 source 的句子
+    sources = sentences.copy()
+    # 所有可作为 dest 的位置（插在 sentences[i] 之前，i 从 0 到 n）
+    dest_positions = list(range(n))
+
+    candidates = []
+    seen = set()
+
+    # 随机选 4 个 source 句，4 个 dest 位置
+    n_src = min(4, len(sources))
+    n_dst = min(4, len(dest_positions))
+    sampled_sources = random.sample(sources, n_src)
+    sampled_dests = random.sample(dest_positions, n_dst)
+
+    for src in sampled_sources:
+        for dst in sampled_dests:
+            # 不插入到自己相邻位置（避免无意义重复）
+            src_idx = sentences.index(src)
+            if abs(src_idx - dst) <= 1:
+                continue
+
+            new_sentences = sentences.copy()
+            new_sentences.insert(dst, src)
+            new_text = " ".join(new_sentences)
+
+            if new_text not in seen and new_text != text:
+                seen.add(new_text)
+                candidates.append(new_text)
+
+            if len(candidates) >= MAX_CANDIDATES:
+                break
+        if len(candidates) >= MAX_CANDIDATES:
+            break
+
+    return candidates[:MAX_CANDIDATES]
+
+
+def get_score(scorer, text: str):
+    """Score a single text."""
+    inputs = scorer.tokenizer(text, return_tensors="pt", truncation=True, max_length=1024, padding=False)
+    input_ids = inputs["input_ids"].squeeze(0).to(scorer.device)
+    attn_mask = inputs["attention_mask"].squeeze(0).to(scorer.device)
+    with torch.no_grad():
+        score = scorer.model(input_ids=input_ids.unsqueeze(0), attention_mask=attn_mask.unsqueeze(0)).logits.squeeze(-1).item()
+    return score
+
+
+def iterative_injection(scorer, text: str):
+    """
+    Self-duplication injection with scorer-guided greedy search.
+    每步：生成候选 -> batch scoring -> 取最优执行
+    若 delta >= 0.1 停止
+    """
+    best_text = text
+    best_score = get_score(scorer, text)
+    original_score = best_score
+    history = []
+
+    for step in range(N_STEPS):
+        candidates = build_candidates(best_text)
+        if not candidates:
+            break
+
+        # Batch scoring 全部候选
+        batch_input = scorer.tokenizer(
+            candidates,
+            return_tensors="pt",
+            truncation=True,
+            max_length=1024,
+            padding=True,
+        )
+        input_ids = batch_input["input_ids"].to(scorer.device)
+        attention_mask = batch_input["attention_mask"].to(scorer.device)
+
+        with torch.no_grad():
+            logits = scorer.model(input_ids=input_ids, attention_mask=attention_mask).logits
+            if logits.ndim > 1:
+                logits = logits.squeeze(-1)
+            scores = logits.tolist()
+
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        top_score = scores[best_idx]
+        top_text = candidates[best_idx]
+
+        if top_score > best_score:
+            best_score = top_score
+            best_text = top_text
+            history.append({"step": step, "score": top_score, "gain": top_score - original_score})
+
+        if best_score - original_score >= THRESHOLD:
+            break
+
+    return best_text, history
+
+
+print("Loading scorer...", flush=True)
+scorer = AESScorer("/root/autodl-tmp/victim/fold0_best", device="cuda", dtype=torch.float32)
+print("Scorer loaded.", flush=True)
+sys.stdout.flush()
+
+if __name__ == "__main__":
+    _ = scorer.score_single("warmup sentence for CUDA context initialization.")
+    torch.cuda.synchronize()
+    print("GPU warmup done.", flush=True)
+    sys.stdout.flush()
+
+    df = pd.read_csv("/root/autodl-tmp/data/valid_fold0.csv")
+    text_col = "full_text" if "full_text" in df.columns else "text"
+    essays = list(zip(df[text_col].tolist()[:N_ESSAYS], df["score"].tolist()[:N_ESSAYS]))
+    print(f"Loaded {len(essays)} essays", flush=True)
+
+    n_ok = 0
+    details = []
+    t0 = time.time()
+
+    for idx, (text, _) in enumerate(essays):
+        try:
+            orig_s = get_score(scorer, text)
+            pert_text, hist = iterative_injection(scorer, text)
+            pert_s = get_score(scorer, pert_text)
+            ok = pert_s - orig_s >= THRESHOLD
+            if ok:
+                n_ok += 1
+            delta = pert_s - orig_s
+            steps = len(hist)
+
+            # 检查文本是否真的变了
+            text_changed = pert_text != text
+
+            # 统计插入了几句
+            orig_sents = len(split_sentences(text))
+            pert_sents = len(split_sentences(pert_text))
+            n_inserted = pert_sents - orig_sents
+
+        except Exception as ex:
+            print(f"[WARN] idx={idx} failed: {ex}", flush=True)
+            orig_s = 0.0; pert_s = 0.0; delta = 0.0; ok = False; steps = 0
+            text_changed = False; n_inserted = 0
+
+        details.append({
+            "idx": idx, "orig": orig_s, "pert": pert_s, "delta": delta,
+            "ok": ok, "steps": steps, "text_changed": text_changed,
+            "n_inserted": n_inserted
+        })
+
+        elapsed = time.time() - t0
+        print(f"[{idx+1}/{N_ESSAYS}] ASR={n_ok/(idx+1):.4f} ({elapsed/60:.1f}min) | "
+              f"orig={orig_s:.3f} pert={pert_s:.3f} delta={delta:+.3f} steps={steps} "
+              f"| changed={text_changed} inserted={n_inserted}", flush=True)
+
+        if (idx + 1) % 10 == 0:
+            progress = {
+                "idx": idx + 1, "n": N_ESSAYS, "n_ok": n_ok,
+                "asr": round(n_ok / (idx + 1), 4),
+                "elapsed_min": round(elapsed / 60, 1)
+            }
+            with open("/tmp/injection_self_dup_30_progress.json", "w") as f:
+                json.dump(progress, f)
+            shutil.copy("/tmp/injection_self_dup_30_progress.json", PROGRESS_FILE)
+
+    asr = n_ok / N_ESSAYS
+    elapsed = time.time() - t0
+    print(f"\n=== Self-Duplication Injection ===", flush=True)
+    print(f"ASR: {asr:.4f} ({n_ok}/{N_ESSAYS}) in {elapsed/60:.1f}min", flush=True)
+
+    avg_delta = sum(d["delta"] for d in details) / len(details)
+    n_changed = sum(1 for d in details if d["text_changed"])
+
+    result = {
+        "asr": asr, "n_ok": n_ok, "n": N_ESSAYS,
+        "elapsed_min": round(elapsed / 60, 1),
+        "avg_delta": round(avg_delta, 4),
+        "n_text_changed": n_changed,
+        "params": {
+            "n_steps": N_STEPS, "beam_size": 1, "max_candidates": MAX_CANDIDATES,
+            "threshold": THRESHOLD,
+            "attack_type": "self_duplication",
+        },
+        "details": details
+    }
+    with open("/tmp/injection_self_dup_30_progress.json", "w") as f:
+        json.dump(result, f)
+    shutil.copy("/tmp/injection_self_dup_30_progress.json", RESULT_FILE)
+    print(f"Saved: {RESULT_FILE}", flush=True)

@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="deccfe76-bdf0-4170-933c-79005d98fa9b" name="更改" comment="first" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;lazysheepzzz&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "git@github.com:lazysheepzzz/aes_scoring.git",
+    "accountId": "9fb51b28-aea2-4e6d-9005-df33029f6199"
+  }
+}]]></component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.5153506877835885" />
+      <entry key="MS500" value="2.705227015233198" />
+      <entry key="S2" value="6.382664182615879" />
+      <entry key="S5" value="9.092972215611619" />
+      <entry key="S10" value="10.403770213067128" />
+      <entry key="S30" value="11.509643654399534" />
+      <entry key="S60" value="12.612799564809274" />
+      <entry key="M2" value="15.832302015014166" />
+      <entry key="M5" value="24.92309124122388" />
+      <entry key="M10" value="33.272635702010476" />
+      <entry key="M15" value="38.62591838265682" />
+      <entry key="M30" value="48.96711772116575" />
+      <entry key="H1" value="58.723848024423404" />
+      <entry key="H2" value="65.78417609279472" />
+      <entry key="H4" value="70.13542627551342" />
+      <entry key="D1" value="78.6879668376561" />
+      <entry key="W1" value="84.57321523862194" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="1.484165124248701" />
+      <entry key="MS500" value="2.6926997457952906" />
+      <entry key="S2" value="6.368898584546856" />
+      <entry key="S5" value="9.083828745266485" />
+      <entry key="S10" value="10.398296075305758" />
+      <entry key="S30" value="11.507565094621237" />
+      <entry key="S60" value="12.61164163874402" />
+      <entry key="M2" value="15.831538572656303" />
+      <entry key="M5" value="24.92256666019328" />
+      <entry key="M10" value="33.27227086685033" />
+      <entry key="M15" value="38.62562890691389" />
+      <entry key="M30" value="48.96692553269955" />
+      <entry key="H1" value="58.72372865245965" />
+      <entry key="H2" value="65.78410784837527" />
+      <entry key="H4" value="70.13538950426934" />
+      <entry key="D1" value="78.68795992768327" />
+      <entry key="W1" value="84.57321418062024" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3Gd5UTTdhMawjKcdvv2iRUZdZIp" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "D:/here/robust_text_scoring-main",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "configurable.group.editor",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-c59985aa861c-c2ffad84badb-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-261.24374.152" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="deccfe76-bdf0-4170-933c-79005d98fa9b" name="更改" comment="" />
+      <created>1784288620446</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1784288620446</updated>
+      <workItem from="1784288621488" duration="13171000" />
+      <workItem from="1784398223220" duration="1094000" />
+      <workItem from="1784399322583" duration="300000" />
+    </task>
+    <task id="LOCAL-00001" summary="first">
+      <option name="closed" value="true" />
+      <created>1784395595367</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1784395595367</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="first" />
+    <option name="LAST_COMMIT_MESSAGE" value="first" />
+  </component>
+</project>

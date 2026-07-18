@@ -1,0 +1,180 @@
+"""
+HotFlipAttack: white-box gradient-guided token replacement (greedy + optimized).
+
+改进：
+1. Gradient-weighted position sampling (按 |g| 概率采样)
+2. 更大的候选池 (top_k_per_pos=8)
+"""
+from __future__ import annotations
+
+import random
+import sys as _sys
+import os as _os
+from typing import Dict, List, Tuple
+
+import numpy as np
+import torch
+
+_d = _os.path.dirname
+_repo_root = _d(_d(_d(_d(_d(_os.path.abspath(__file__))))))
+if _repo_root not in _sys.path:
+    _sys.path.insert(0, _repo_root)
+
+from text_scoring_adv_training.evaluation.robustness_tests.common.hotflip import (
+    _sample_positions,
+    _topk_per_position,
+)
+
+__all__ = ["HotFlipAttack"]
+
+
+class HotFlipAttack:
+    """
+    White-box gradient-guided token replacement.
+
+    改进点：
+    - Gradient-weighted sampling: 按梯度 magnitude 加权采样位置
+    - 更大的候选池: top_k_per_pos=8
+    """
+
+    def __init__(
+        self,
+        scorer,
+        *,
+        n_steps: int = 20,
+        beam_size: int = 4,
+        n_sample_pos: int = 8,
+        top_k_per_pos: int = 16,
+        specials=None,
+    ):
+        self.scorer = scorer
+        self.n_steps = n_steps
+        self.beam_size = beam_size
+        self.n_sample_pos = n_sample_pos
+        self.top_k_per_pos = top_k_per_pos
+        tok = scorer.tokenizer
+        self.specials = specials if specials is not None else set(tok.all_special_ids)
+
+    def attack(self, text: str) -> Tuple[str, List[Dict]]:
+        device = self.scorer.device
+        inputs = self.scorer.tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=1024,
+            padding=True,
+        )
+        input_ids = inputs["input_ids"].squeeze(0)
+        attention_mask = inputs["attention_mask"].squeeze(0)
+        span = (0, len(input_ids))
+
+        best_ids = input_ids.clone()
+        with torch.no_grad():
+            original_score = float(
+                self.scorer.model(
+                    input_ids=input_ids.unsqueeze(0).to(device),
+                    attention_mask=attention_mask.unsqueeze(0).to(device),
+                ).logits.squeeze(-1).item()
+            )
+        best_score = original_score
+        swap_history: List[Dict] = []
+
+        for step in range(self.n_steps):
+            emb_layer = self.scorer.model.get_input_embeddings()
+            E = emb_layer.weight.detach().float()
+            ids_dev = input_ids.unsqueeze(0).to(device)
+            att_dev = attention_mask.unsqueeze(0).to(device)
+
+            with torch.enable_grad():
+                emb_in = emb_layer(ids_dev).detach().clone().requires_grad_(True)
+                logits = self.scorer.model(
+                    inputs_embeds=emb_in, attention_mask=att_dev
+                ).logits
+                if logits.ndim > 1:
+                    logits = logits.squeeze(-1)
+                (grad,) = torch.autograd.grad(logits.sum(), emb_in, retain_graph=False)
+
+            g = grad.squeeze(0).float()
+            ids_list = ids_dev.squeeze(0).tolist()
+
+            positions = _sample_positions(input_ids, span, self.specials)
+            if not positions:
+                break
+
+            # Gradient-weighted position sampling
+            grad_mag = np.array([float(g[p].norm().item()) for p in positions])
+            grad_mag_sum = grad_mag.sum()
+            if grad_mag_sum > 0:
+                probs = grad_mag / grad_mag_sum
+                kpos = min(self.n_sample_pos, len(positions))
+                try:
+                    sampled = list(np.random.choice(
+                        positions, size=kpos, replace=False, p=probs
+                    ))
+                except Exception:
+                    sampled = random.sample(positions, kpos)
+            else:
+                sampled = random.sample(positions, min(self.n_sample_pos, len(positions)))
+
+            # 收集候选（只测 -g 方向，顺着梯度）
+            all_candidates: List[Dict] = []
+            with torch.no_grad():
+                for pos in sampled:
+                    old_id = int(ids_list[pos])
+                    cand_ids, _ = _topk_per_position(
+                        E, -g[pos], old_id, self.specials, self.top_k_per_pos
+                    )
+                    for cand_id in cand_ids:
+                        if cand_id == old_id or cand_id in self.specials:
+                            continue
+                        new_ids = input_ids.clone()
+                        new_ids[pos] = cand_id
+                        sc = float(
+                            self.scorer.model(
+                                input_ids=new_ids.unsqueeze(0).to(device),
+                                attention_mask=attention_mask.unsqueeze(0).to(device),
+                            ).logits.squeeze(-1).item()
+                        )
+                        all_candidates.append({
+                            "pos": pos, "old_id": old_id, "new_id": cand_id, "score": sc
+                        })
+
+            if not all_candidates:
+                break
+
+            # 取分数最高的 beam_size 个候选
+            all_candidates.sort(key=lambda x: -x["score"])
+            top_candidates = all_candidates[:self.beam_size]
+
+            # 找有没有超过 best_score 的
+            improved = False
+            best_cand = None
+            for cand in top_candidates:
+                if cand["score"] > best_score:
+                    best_score = cand["score"]
+                    new_ids = input_ids.clone()
+                    new_ids[cand["pos"]] = cand["new_id"]
+                    best_ids = new_ids
+                    improved = True
+                    best_cand = cand
+                    swap_history.append({
+                        "step": step,
+                        "pos": cand["pos"],
+                        "old_id": cand["old_id"],
+                        "new_id": cand["new_id"],
+                        "score": cand["score"],
+                        "gain": cand["score"] - original_score,
+                    })
+
+            if improved and best_cand is not None:
+                new_ids = input_ids.clone()
+                new_ids[best_cand["pos"]] = best_cand["new_id"]
+                input_ids = new_ids
+            else:
+                break
+
+        best_text = self.scorer.tokenizer.decode(best_ids, skip_special_tokens=True)
+        return best_text, swap_history
+
+    def attack_batch(self, texts: List[str]) -> List[Tuple[str, List[Dict]]]:
+        return [self.attack(t) for t in texts]
