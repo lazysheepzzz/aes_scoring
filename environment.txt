@@ -1,0 +1,40 @@
+Rudimentary、HotFlip、MLM 实验环境
+
+OS: Ubuntu 22.04 LTS
+GPU: NVIDIA RTX 4090 24GB
+NVIDIA Driver: >= 550
+CUDA: 12.4
+Python: 3.11.9
+Conda environment: aes
+RAM: >= 32GB
+
+创建环境：
+
+conda create -n aes python=3.11.9 -y
+conda activate aes
+python -m pip install --upgrade pip setuptools wheel
+
+安装 CUDA PyTorch：
+
+python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+安装必要依赖：
+
+python -m pip install transformers==5.9.0 tokenizers==0.22.2 safetensors==0.7.0 sentencepiece==0.2.1
+python -m pip install numpy==2.2.6 pandas==2.2.3
+python -m pip install -e .
+
+需要的模型：
+
+deberta_checkpoints/fold0_best
+answerdotai/ModernBERT-large
+
+环境变量：
+
+HF_HOME=/root/autodl-tmp/hf_cache
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+
+验证：
+
+python -c "import torch, transformers, pandas, numpy; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), transformers.__version__)"
