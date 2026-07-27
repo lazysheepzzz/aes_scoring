@@ -4,10 +4,10 @@
 
 - 项目名称：英语作文自动评分中的虚高攻击、跨攻击迁移与组合对抗训练
 - 基础框架：《Unifying Adversarial Robustness and Training Across Text Scoring Models》
-- 当前版本：1.0
+- 当前版本：1.1
 - 建立日期：2026-07-27
 - 维护方式：每次修改实验协议、参数、数据划分、指标定义后，先更新本文件，再运行实验
-- 当前结论：仓库内已有结果统一标记为预实验；修复 padding、MLM tokenizer、训练循环、评估口径后产生的结果标记为正式实验
+- 当前结论：冻结现有 fold0 数据划分；已有 checkpoint 和攻击结果通过资产审计后继续使用；只重跑受代码错误、损失变化、参数缺失直接影响的实验
 
 ---
 
@@ -38,28 +38,42 @@
 
 ## 2. 当前工作定位
 
-### 2.1 可保留的预实验资产
+### 2.1 已有资产
 
 - `data/train.csv`：17,307 篇作文。
 - `data/train_fold0.csv`：16,153 篇。
 - `data/valid_fold0.csv`：1,154 篇。
 - `deberta_checkpoints/fold0_best/`：当前未防御 DeBERTa checkpoint。
-- Rudimentary 预实验：1,134 篇，`ASRΔ@0.1 = 94.97%`。
-- HotFlip 预实验：1,154 篇，`ASRΔ@0.1 = 87.78%`。
-- MLM-guided 预实验：结果仅保留作问题记录，不进入正式论文表格。
-- HotFlip defended 预实验：结果仅保留作问题记录，不进入正式论文主结论。
+- Rudimentary：1,134 篇，`ASRΔ@0.10 = 94.97%`，保留逐样本连续分数。
+- HotFlip undefended：1,154 篇，`ASRΔ@0.10 = 87.78%`，保留逐样本连续分数。
+- HotFlip defended：1,154 篇，`ASRΔ@0.10 = 67.50%`，保留逐样本连续分数。
+- MLM-guided：1,134 篇，已知存在 tokenizer 边界问题，只作为错误分析记录。
 
-### 2.2 必须重跑的实验
+### 2.2 资产复用规则
 
-- MLM-guided 未防御攻击。
-- Injection 未防御攻击。
-- 修复后统一协议下的全部六类攻击。
-- Clean continued control。
-- HotFlip 单攻击防御。
-- 其他单攻击防御。
-- 跨攻击迁移矩阵。
-- 组合对抗训练。
-- 所有正式 clean performance 评估。
+不因数据划分重跑任何实验。每项资产按下表处理：
+
+| 资产 | 处理 |
+|---|---|
+| 当前未防御 DeBERTa | 完成配置、数据 hash、clean 指标审计；审计通过后登记为 `B0_BASE seed 42` |
+| HotFlip undefended 1,154 条 | 直接复用 `ASRΔ@0.10`、Mean Δ、逐样本 delta；仅为文本质量检查重跑固定 50 条 |
+| HotFlip defended 1,154 条 | 作为旧损失函数结果保留；新损失函数训练完成后只评估新 checkpoint |
+| Rudimentary 1,134 条 | 保留已有 1,134 条；使用相同 checkpoint 和攻击参数补跑索引 1,134–1,153 共 20 条 |
+| MLM-guided 1,134 条 | 修复 tokenizer 后重跑；旧结果不进入主结果表 |
+| Injection、Keyword、Template | 当前没有完整结果，按正式协议首次运行 |
+
+已有逐样本 `orig`、`pert`、`delta` 的结果直接重新计算 `ASRΔ@0.05`、`ASRΔ@0.10` 和分数变化统计。重新计算指标不重新执行攻击。
+
+### 2.3 重跑触发条件
+
+只在以下条件成立时重跑：
+
+1. 已确认的代码错误改变候选文本、模型输入、预测分数。
+2. 防御损失函数发生变化；此时只重训受影响的防御模型。
+3. checkpoint、数据 hash、关键参数无法确认。
+4. 结果缺少完成目标指标必需的逐样本字段。
+
+训练轮数、学习率不同本身不要求重训 B0。第二阶段增加 `C0_CLEAN_CONT`，用于控制继续训练带来的影响。
 
 ---
 
@@ -67,61 +81,40 @@
 
 ### 3.1 数据源
 
-使用以下两个带完整元数据的文件合并为正式全量数据：
+正式实验继续使用现有 fold0 文件：
 
 ```text
 data/train_fold0.csv
 data/valid_fold0.csv
 ```
 
-合并后总数固定为 17,307。合并时执行：
+执行一次固定审计：
 
 1. 按 `essay_id` 检查唯一性。
 2. 按 `full_text` 检查重复正文。
 3. 检查 `score` 范围为 1–6。
 4. 检查 `prompt_name` 非空。
-5. 输出数据检查报告 `reports/data_split_report.json`。
+5. 记录两个文件的 SHA256。
+6. 输出数据检查报告 `reports/fold0_data_report.json`。
 
 ### 3.2 正式划分
 
-使用：
-
-```python
-StratifiedKFold(
-    n_splits=8,
-    shuffle=True,
-    random_state=42,
-)
-```
-
-分层标签固定为：
+固定为：
 
 ```text
-prompt_name + "|" + score
+train = data/train_fold0.csv，16,153 篇
+benchmark = data/valid_fold0.csv，1,154 篇
 ```
 
-划分定义：
-
-- fold 0：test。
-- fold 1：dev。
-- fold 2–7：train。
-
-固定规模：
-
-- train：12,979。
-- dev：2,164。
-- test：2,164。
-
-划分生成后保存：
+不合并文件，不移动样本，不生成新的 fold。保存协议文件：
 
 ```text
-data/formal/train.csv
-data/formal/dev.csv
-data/formal/test.csv
-data/formal/split_manifest.json
+artifacts/data/fold0_manifest.json
 ```
 
-正式 test 在所有模型训练、超参数选择、阈值选择完成前不得用于模型选择。
+`valid_fold0.csv` 已参与历史 checkpoint 检查和攻击调试，因此论文中统一称为 benchmark set，不称为独立盲测 test。该限制写入论文 threats to validity。
+
+从版本 1.1 开始冻结 benchmark。新增攻击、损失、参数先在固定 256 篇调试子集上运行，完整 1,154 篇只执行最终配置。未来取得独立标注数据后新增 external test，该扩展不改变 fold0 主结果。
 
 ### 3.3 低质量作文定义
 
@@ -149,7 +142,7 @@ B0_BASE
 
 - 生成未防御攻击基线。
 - 作为第二阶段全部模型的共同初始化 checkpoint。
-- 在 dev 上生成共享等级阈值。
+- 在 fold0 benchmark 上生成共享等级阈值。
 
 ### 4.2 第二阶段对照与防御模型
 
@@ -190,7 +183,7 @@ B0_BASE vs D_*
 44
 ```
 
-数据划分始终使用 seed 42。模型初始化、dataloader、攻击采样分别使用当前训练 seed。
+数据文件固定，不再执行随机划分。模型初始化、dataloader、攻击采样分别使用当前训练 seed。
 
 ---
 
@@ -221,7 +214,7 @@ B0_BASE vs D_*
 | classifier_dropout | 0.0 |
 | gradient_clip_norm | 1.0 |
 | eval_every_optimizer_steps | 100 |
-| metric_for_best_model | clean dev QWK |
+| metric_for_best_model | clean fold0 benchmark QWK |
 
 ### 5.2 第二阶段统一训练参数
 
@@ -378,10 +371,12 @@ Template
 - beam size 固定为 1。
 - 每步候选数固定为 16。
 - 保存每一步当前最高分。
-- 正式评估不在 `delta = 0.1` 时提前停止。
-- 达到攻击预算后返回全程最高分文本。
+- 主实验在首次达到 `delta >= 0.1` 时停止，保持与现有 Rudimentary、HotFlip 结果一致。
+- 未达到成功阈值时搜索至攻击预算结束，并返回全程最高分文本。
 - 候选文本先规范化为字符串，再由 DeBERTa tokenizer 重新编码和评分。
 - 结果保存作文 ID、真实分数、prompt、原文、攻击文本、编辑记录、每步分数。
+
+全预算补充实验不提前停止，只在固定 256 篇 benchmark debugging subset 上运行，报告 `ASRΔ@0.20` 和 `ASRΔ@0.50`。该补充实验不替代主实验，不要求重跑已有 1,154 条 HotFlip 结果。
 
 ### 7.2 Rudimentary
 
@@ -513,7 +508,7 @@ similarity(sentence, essay) <= 0.20
 
 ### 7.6 Keyword injection
 
-关键词只从 formal train 中提取。每个 prompt 分别计算高分作文与低分作文的 TF-IDF 差异：
+关键词只从 `data/train_fold0.csv` 中提取。每个 prompt 分别计算高分作文与低分作文的 TF-IDF 差异：
 
 ```text
 高分组：score 5–6
@@ -585,15 +580,21 @@ Median Δ
 P90 Δ
 ASRΔ@0.05
 ASRΔ@0.10
-ASRΔ@0.20
-ASRΔ@0.50
 ```
 
 已有的 `delta >= 0.1` 结果统一命名为 `ASRΔ@0.10`。
 
+固定 256 篇全预算补充实验额外报告：
+
+```text
+ASRΔ@0.20
+ASRΔ@0.50
+Full-budget Mean Δ
+```
+
 ### 8.2 等级阈值
 
-使用 B0 seed 42 在 clean dev 上优化五个单调阈值，将 0–5 回归输出映射到 1–6 等级。该阈值保存为：
+使用 B0 seed 42 在 clean fold0 benchmark 上优化五个单调阈值，将 0–5 回归输出映射到 1–6 等级。该阈值保存为：
 
 ```text
 artifacts/calibration/shared_grade_thresholds.json
@@ -659,7 +660,7 @@ s(x_{low}^{adv})\ge s(x_{high})
 
 ### 8.6 正常评分性能
 
-每个 checkpoint 在 clean test 上报告：
+每个 checkpoint 在 clean fold0 benchmark 上报告：
 
 ```text
 QWK
@@ -685,7 +686,7 @@ score 5–6 MAE
 平均完整搜索步数
 ```
 
-每类攻击从 test 中固定抽取 50 个成功样本做人工检查。人工检查记录：
+每类攻击从 fold0 benchmark 中固定抽取 50 个成功样本做人工检查。人工检查记录：
 
 - 语义是否保持。
 - 语法质量是否改善。
@@ -759,15 +760,15 @@ Injection family 使用两个子类的平均值后再进入六类宏平均，防
 
 ### 10.1 C0
 
-C0 使用 clean dev QWK 最高的 checkpoint。
+C0 使用 clean fold0 benchmark QWK 最高的 checkpoint。
 
 ### 10.2 防御模型
 
-为每个训练 seed 固定一个 256 篇的 dev robustness subset，按 `prompt_name + score` 分层抽样，抽样 seed 为 42。
+为每个训练 seed 固定一个 256 篇的 benchmark debugging subset，按 `prompt_name + score` 分层抽样，抽样 seed 为 42。子集作文 ID 保存到 `artifacts/data/debug_subset_ids.json`。
 
 每个保存 checkpoint 执行：
 
-1. 计算完整 clean dev QWK。
+1. 计算完整 clean fold0 benchmark QWK。
 2. 在 robustness subset 上执行对应训练攻击，评估预算为正式预算的三分之一。
 3. 只保留 `QWK >= C0_QWK - 0.02` 的 checkpoint。
 4. 在合格 checkpoint 中选择 `ASRΔ@0.10` 最低者。
@@ -775,7 +776,7 @@ C0 使用 clean dev QWK 最高的 checkpoint。
 
 D_COMBINED 在 subset 上计算六类攻击的 Macro ASRΔ@0.10，并使用相同规则选择 checkpoint。
 
-test 只在 checkpoint 选择完成后运行一次。
+完整 1,154 篇攻击评估只在 checkpoint 选择完成后运行一次。
 
 ---
 
@@ -851,7 +852,7 @@ test 只在 checkpoint 选择完成后运行一次。
 
 ### P1：攻击闭环
 
-- [ ] 完成正式数据划分脚本。
+- [ ] 完成 fold0 数据审计与 manifest 脚本。
 - [ ] 完成共享等级阈值优化脚本。
 - [ ] 完成 Keyword bank 生成脚本。
 - [ ] 完成 Template bank。
@@ -864,12 +865,12 @@ test 只在 checkpoint 选择完成后运行一次。
 - [ ] 实现 C0 clean continued control。
 - [ ] 实现六个单攻击 trainer config。
 - [ ] 实现 D_COMBINED 平衡攻击调度器。
-- [ ] 实现 dev robustness subset checkpoint 选择。
+- [ ] 实现 benchmark debugging subset checkpoint 选择。
 - [ ] 保存 optimizer、scheduler、training state。
 
 ### P3：评估与报告
 
-- [ ] 运行 B0 六攻击基线。
+- [ ] 审计并复用 B0 已有攻击结果，只运行缺失项和确认失效项。
 - [ ] 运行单攻击防御矩阵。
 - [ ] 运行跨攻击迁移矩阵。
 - [ ] 运行组合防御矩阵。
@@ -896,8 +897,8 @@ configs/aes/
 ├─ adv_template.json
 └─ adv_combined.json
 
-data/formal/
 data/attack_resources/
+artifacts/data/fold0_manifest.json
 artifacts/calibration/
 
 outputs/
@@ -954,18 +955,24 @@ GPU 型号
 
 ### Phase 1：数据与 B0
 
-1. 生成 formal train/dev/test。
-2. 训练 B0 seed 42。
-3. 达到 QWK 验收标准后训练 seed 43、44。
-4. 在 B0 seed 42 dev 上生成共享等级阈值。
-5. 冻结数据与阈值文件 hash。
+1. 审计现有 fold0 文件并生成 manifest。
+2. 审计当前 `fold0_best` 配置和 clean 指标。
+3. 审计通过后登记当前 checkpoint 为 `B0_BASE seed 42`，不重新训练。
+4. 审计失败后只重新训练 `B0_BASE seed 42`。
+5. 在 B0 seed 42 benchmark 上生成共享等级阈值。
+6. 冻结数据、checkpoint、阈值文件 hash。
+7. seed 43、44 作为新增重复实验，不替代 seed 42 已有结果。
 
 ### Phase 2：未防御攻击
 
-1. 在 B0 三个 seed 上运行六类攻击。
-2. 生成连续、等级、overgrade、rank-flip 指标。
-3. 完成低质量作文分组。
-4. 完成每类 50 个样本的人工检查。
+1. 复用 B0 seed 42 的 HotFlip 1,154 条结果。
+2. 为 Rudimentary 补跑缺少的 20 条。
+3. 修复后重跑 MLM-guided。
+4. 首次运行 Injection、Keyword、Template。
+5. 从已有逐样本分数重新计算连续和等级指标。
+6. 为 HotFlip 和 Rudimentary 各重跑固定 50 条，保存攻击文本并完成人工质量检查。
+7. 完成低质量作文分组。
+8. seed 43、44 只执行论文最终保留的攻击配置。
 
 ### Phase 3：对照与单攻击防御
 
@@ -1002,14 +1009,15 @@ GPU 型号
 ## 15. 每次实验前检查清单
 
 - [ ] 当前实现使用 right padding。
-- [ ] 当前运行使用 formal split。
-- [ ] test 未参与模型选择。
+- [ ] 当前运行使用冻结的 fold0 文件。
+- [ ] 完整 benchmark 攻击评估只运行最终配置。
 - [ ] config 已复制到输出目录。
 - [ ] seed 已设置到 Python、NumPy、PyTorch、CUDA、dataloader。
 - [ ] 模型处于正确的 train/eval 状态。
 - [ ] 攻击没有跨 tokenizer 共享 token ID。
 - [ ] 攻击预算与本文件一致。
-- [ ] 正式攻击没有在 delta 0.1 提前停止。
+- [ ] 主实验在 delta 0.1 成功时停止。
+- [ ] 全预算补充实验仅使用固定 256 篇子集。
 - [ ] 结果保存完整文本和作文 ID。
 - [ ] 等级指标使用共享阈值。
 - [ ] 低质量分组结果已生成。
@@ -1022,6 +1030,7 @@ GPU 型号
 
 | 日期 | 版本 | 修改内容 | 修改人 |
 |---|---|---|---|
+| 2026-07-27 | 1.1 | 冻结现有 fold0 划分；增加已有结果审计与按影响范围重跑规则 | Codex |
 | 2026-07-27 | 1.0 | 建立正式数据、攻击、损失、训练、评估与验收协议 | Codex |
 
 后续更新规则：
