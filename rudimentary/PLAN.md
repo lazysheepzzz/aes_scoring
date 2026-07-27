@@ -37,7 +37,7 @@ Rudimentary 是基于字符/词级随机编辑的攻击（拼写错误、词序�
 **目标**：训练抵御 Rudimentary 攻击的模型
 
 - 参考论文原版对抗训练方案（与 HotFlip v4 对齐）
-- 训练脚本：`run_rudimentary_adv_v4.sh`（需新建，参考 HotFlip v4 训练框架）
+- 训练脚本：`run_rudimentary_adv_v4.py`（需新建，参考 HotFlip v4 训练框架）
 - 对抗训练数据生成：`generate_rudimentary_train_adv_data.py`（需新建）
 - 配置参数：weight=2.0, margin=0.1, epochs=5（与 HotFlip v4 对齐）
 - 输出：`/root/autodl-tmp/rudimentary_adv_v4/`
@@ -69,7 +69,7 @@ Rudimentary 是基于字符/词级随机编辑的攻击（拼写错误、词序�
 | 文件 | 作用 |
 |------|------|
 | `generate_rudimentary_train_adv_data.py` | 生成 Rudimentary 对抗训练数据 |
-| `run_rudimentary_adv_v4.sh` | Rudimentary 对抗训练启动脚本 |
+| `run_rudimentary_adv_v4.py` | Rudimentary 对抗训练启动脚本 |
 | `eval_rudimentary_defended.py` | 对 defended 模型跑 Rudimentary ASR |
 
 ### 已有文件（服务器，已有代码逻辑正确）
@@ -108,25 +108,24 @@ Rudimentary 是基于字符/词级随机编辑的攻击（拼写错误、词序�
 
 ```bash
 # 直接修改服务器已有脚本的 N_ESSAYS，然后运行
-source /root/miniconda3/etc/profile.d/conda.sh && conda activate aes
 cd /root/autodl-tmp/robust_text_scoring
 # 修改 run_rudimentary_full1134_thresh.py 中 N_ESSAYS=1134 → 1154
-python rudimentary/run_rudimentary_full1134_thresh.py
+conda run --no-capture-output -n aes python rudimentary/run_rudimentary_full1134_thresh.py
 # 结果输出到 /root/autodl-tmp/aes_final_run/rudimentary_valid_1154_result.json
 ```
 
 ### Phase 2: 对抗训练
 
 ```bash
-bash /root/autodl-tmp/rudimentary_adv_v4.sh
+cd /root/autodl-tmp/robust_text_scoring
+python rudimentary/run_rudimentary_adv_v4.py
 ```
 
 ### Phase 3: 跑 defended ASR
 
 ```bash
-source /root/miniconda3/etc/profile.d/conda.sh && conda activate aes
 cd /root/autodl-tmp/robust_text_scoring
-python whitebox/rudimentary/eval_rudimentary_defended.py
+conda run --no-capture-output -n aes python whitebox/rudimentary/eval_rudimentary_defended.py
 ```
 
 ---

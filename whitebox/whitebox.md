@@ -58,12 +58,16 @@ HotFlip 是基于梯度引导的 token 替换攻击。对 essay 中每个 token 
 | `eval_defended.py` | 对 **defended** 模型跑 HotFlip ASR 评估 |
 | `generate_hotflip_train_adv_data.py` | 生成对抗训练用的 HotFlip 数据（JSONL 格式），用于离线对抗训练 |
 
-### Shell 脚本
+### Python 启动脚本
 
 | 文件 | 作用 |
 |------|------|
-| `run_aes_attacks.sh` | 通用攻击入口（调用 `evaluation/aes/run_attacks.py`） |
-| `run_aes_adv_v4.sh` | v4 对抗训练启动脚本 |
+| `run_aes_attacks.py` | 通用攻击入口（调用 `evaluation/aes/run_attacks.py`） |
+| `run_aes_adv_v4.py` | v4 对抗训练入口；生成训练器支持的 JSON 配置 |
+| `run_aes_eval_v4.py` | v4 clean QWK、MAE 和 HotFlip ASR 评估入口 |
+
+三个入口均支持 `--help` 和 `--dry-run`。服务器上默认使用 `aes` Conda
+环境，本地默认使用当前 Python 解释器。路径参数均可通过命令行覆盖。
 
 ### 结果 JSON
 
@@ -103,21 +107,27 @@ HotFlip 是基于梯度引导的 token 替换攻击。对 essay 中每个 token 
 ### 1. 跑 undefended ASR
 
 ```bash
-source /root/miniconda3/etc/profile.d/conda.sh && conda activate aes
 cd /root/autodl-tmp/robust_text_scoring
-python whitebox/run_hotflip_valid_1154.py
+conda run --no-capture-output -n aes python whitebox/run_hotflip_valid_1154.py
 ```
 
 ### 2. 跑 v4 对抗训练
 
 ```bash
-bash /root/autodl-tmp/run_aes_adv_v4.sh
+cd /root/autodl-tmp/robust_text_scoring
+python whitebox/run_aes_adv_v4.py
 ```
 
-### 3. 跑 defended ASR（需先修改 eval_defended.py 里的 CHECKPOINT 路径）
+### 3. 跑 defended clean 指标和 HotFlip ASR
 
 ```bash
-source /root/miniconda3/etc/profile.d/conda.sh && conda activate aes
 cd /root/autodl-tmp/robust_text_scoring
-python whitebox/eval_defended.py
+python whitebox/run_aes_eval_v4.py
+```
+
+只检查命令和参数，不启动训练与评估：
+
+```bash
+python whitebox/run_aes_adv_v4.py --dry-run
+python whitebox/run_aes_eval_v4.py --dry-run
 ```
