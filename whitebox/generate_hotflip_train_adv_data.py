@@ -11,15 +11,22 @@ HotFlip Adversarial Training Data Generator — TRAIN full 16153 essays
   服务器：/root/autodl-tmp/aes_final_run/hotflip_train_adv_data.jsonl
   本地  ：D:/here/robust_text_scoring-main/data/hotflip_train_adv_data.jsonl
 """
-import sys, json, time, os, shutil
+import sys, json, time, os, random, shutil
 sys.path.insert(0, "/root/autodl-tmp/robust_text_scoring")
 import torch
+import numpy as np
 import pandas as pd
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.evaluation.aes.attacks.hotflip import HotFlipAttack
 
 OUT_DIR = "/root/autodl-tmp/aes_final_run"
-LOCAL_DATA_DIR = "/root/autodl-tmp/robust_text_scoring/data"
+SEED = 42
+
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+os.makedirs(OUT_DIR, exist_ok=True)
 
 df_train = pd.read_csv("/root/autodl-tmp/data/train_fold0.csv")
 N_ESSAYS = len(df_train)  # 动态读取，不硬编码
@@ -54,20 +61,21 @@ atk = HotFlipAttack(
     top_k_per_pos=2,
     max_candidates_per_step=16,
     threshold=THRESHOLD,
+    max_token_edit_rate=0.1,
 )
 
 # 流式写入 JSONL
-server_out = os.path.join(OUT_DIR, "hotflip_train_16153_adv_data.jsonl")
-tmp_out = "/tmp/hotflip_train_16153_adv_data.jsonl"
+server_out = os.path.join(OUT_DIR, f"hotflip_train_{N_ESSAYS}_adv_data.jsonl")
+tmp_out = f"/tmp/hotflip_train_{N_ESSAYS}_adv_data.jsonl"
 
 n_ok = 0
 t0 = time.time()
 
 with open(tmp_out, "w", encoding="utf-8") as f_out:
     # 分块读取，避免 pandas 全量加载 42MB CSV
-    for chunk_idx, chunk in enumerate(pd.read_csv(csv_path, chunksize=500)):
-        for _, row in chunk.iterrows():
-            idx = chunk_idx * 500 + _
+    for chunk in pd.read_csv(csv_path, chunksize=500):
+        for row_idx, row in chunk.iterrows():
+            idx = int(row_idx)
             text = str(row["full_text"]) if "full_text" in row else str(row["text"])
             essay_id = str(row.get("essay_id", f"idx_{idx}"))
 

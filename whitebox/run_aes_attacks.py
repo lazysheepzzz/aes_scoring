@@ -105,6 +105,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
     parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--success-threshold", type=float, default=0.1)
+    parser.add_argument("--n-steps", type=int, default=30)
+    parser.add_argument("--beam-size", type=int, default=1)
+    parser.add_argument("--n-sample-pos", type=int, default=8)
+    parser.add_argument("--top-k-per-pos", type=int, default=2)
+    parser.add_argument("--max-candidates-per-step", type=int, default=16)
+    parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
     parser.add_argument(
         "--hf-home",
         type=Path,
@@ -174,6 +182,22 @@ def build_command(args: argparse.Namespace) -> list[str]:
         args.dtype,
         "--batch-size",
         str(args.batch_size),
+        "--seed",
+        str(args.seed),
+        "--success-threshold",
+        str(args.success_threshold),
+        "--n-steps",
+        str(args.n_steps),
+        "--beam-size",
+        str(args.beam_size),
+        "--n-sample-pos",
+        str(args.n_sample_pos),
+        "--top-k-per-pos",
+        str(args.top_k_per_pos),
+        "--max-candidates-per-step",
+        str(args.max_candidates_per_step),
+        "--max-token-edit-rate",
+        str(args.max_token_edit_rate),
     ]
     if args.thresholds is not None:
         command.extend(["--thresholds", str(args.thresholds)])
@@ -182,6 +206,21 @@ def build_command(args: argparse.Namespace) -> list[str]:
 
 def main() -> int:
     args = build_parser().parse_args()
+    positive_fields = (
+        "batch_size",
+        "n_steps",
+        "beam_size",
+        "n_sample_pos",
+        "top_k_per_pos",
+        "max_candidates_per_step",
+    )
+    for field in positive_fields:
+        if getattr(args, field) <= 0:
+            raise ValueError(f"{field} must be greater than zero")
+    if args.success_threshold < 0:
+        raise ValueError("success_threshold must be non-negative")
+    if not 0 < args.max_token_edit_rate <= 1:
+        raise ValueError("max_token_edit_rate must be in (0, 1]")
     _configure_environment(args)
     command = build_command(args)
 

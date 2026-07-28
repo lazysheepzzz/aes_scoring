@@ -835,20 +835,20 @@ D_COMBINED 在 subset 上计算六类攻击的 Macro ASRΔ@0.10，并使用相�
 
 ### P0：正式实验前必须完成
 
-- [ ] 将 AES DeBERTa tokenizer 改为 right padding。
-- [ ] 新增测试：同一短文本单独评分与混合长度 batch 评分差异小于 `1e-5`。
+- [x] 将 AES DeBERTa tokenizer 改为 right padding。
+- [x] 新增测试：同一短文本单独评分与混合长度 batch 评分差异小于 `1e-5`。
 - [ ] 修复 MLM tokenizer 流程，禁止跨 tokenizer 共享 ID。
 - [ ] 新增 MLM 测试：候选文本 decode 后可由 DeBERTa 独立重新编码。
 - [ ] 统一 `aes_trainer.py` CLI 与 JSON config。
-- [ ] 修复梯度累积尾部 optimizer step。
-- [ ] 防止同一 global step 重复 eval 和 save。
-- [ ] 修复 HotFlip 左 padding span。
-- [ ] 让 `hotflip_max_candidates` 实际生效。
-- [ ] HotFlip 候选必须经过真实评分后再选择。
+- [x] 修复梯度累积尾部 optimizer step。
+- [x] 防止同一 global step 重复 eval 和 save。
+- [x] 修复 HotFlip 左 padding span。
+- [x] 让 `hotflip_max_candidates` 实际生效。
+- [x] HotFlip 候选必须经过真实评分后再选择。
 - [ ] 统一 `ASRΔ@0.10`、Grade-ASR、Overgrade-ASR、Rank-flip ASR。
-- [ ] band crossing 只统计向上跨级。
-- [ ] 所有攻击设置随机种子。
-- [ ] 所有输出目录由程序创建。
+- [x] band crossing 只统计向上跨级。
+- [x] 所有攻击设置随机种子。
+- [x] 所有输出目录由程序创建。
 
 ### P1：攻击闭环
 

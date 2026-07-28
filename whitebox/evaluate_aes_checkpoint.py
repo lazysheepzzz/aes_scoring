@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run D_HOTFLIP using the shared AES stage-two training configuration."""
+"""Evaluate any AES checkpoint on clean metrics and HotFlip robustness."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from whitebox.aes_stage2_training_launcher import HOTFLIP_DEFENSE, main
+from whitebox.eval_hotflip_defended import main
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(HOTFLIP_DEFENSE))
+    raise SystemExit(main())

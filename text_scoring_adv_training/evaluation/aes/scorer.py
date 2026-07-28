@@ -41,8 +41,9 @@ class AESScorer(nn.Module):
         self.tokenizer = AutoTokenizer.from_pretrained(
             str(self.checkpoint_path), trust_remote_code=True
         )
-        # Ensure padding_side is left (CLS pooling for encoder models)
-        self.tokenizer.padding_side = "left"
+        # DeBERTa's sequence-classification pooler reads the first token.  Keep
+        # CLS at position zero by padding encoder inputs on the right.
+        self.tokenizer.padding_side = "right"
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
 
