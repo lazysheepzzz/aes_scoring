@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rudimentary Attack — FULL 1134 essays (统一搜索策略 + 阈值0.1)
+Rudimentary Attack — FULL 1154 essays (统一搜索策略 + 阈值0.1)
 beam=1, 每步候选16, 迭代上限30, delta>=0.1才停
 """
 import sys, json, time, os, shutil
@@ -14,7 +14,7 @@ OUT_DIR = "/root/autodl-tmp/aes_final_run"
 RESULT_FILE = os.path.join(OUT_DIR, "rudimentary_unified_thresh_result.json")
 PROGRESS_FILE = os.path.join(OUT_DIR, "rudimentary_unified_thresh_progress.json")
 
-N_ESSAYS = 1134
+N_ESSAYS = 1154
 N_STEPS = 30
 N_CANDIDATES = 16
 THRESHOLD = 0.1
