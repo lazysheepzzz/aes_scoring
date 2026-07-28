@@ -15,6 +15,7 @@ from text_scoring_adv_training.training.aes_trainer import (
     AESAdversarialConfig,
     build_adamw_parameter_groups,
     one_sided_score_inflation_loss,
+    tensor_to_float_numpy,
 )
 from whitebox.aes_stage2_training_launcher import (
     CLEAN_CONTINUATION,
@@ -139,6 +140,14 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         self.assertIn(id(model[1].bias), no_decay_ids)
         self.assertEqual(groups[0]["weight_decay"], 0.01)
         self.assertEqual(groups[1]["weight_decay"], 0.0)
+
+    def test_bfloat16_evaluation_output_is_numpy_compatible(self):
+        values = torch.tensor([0.25, 0.75], dtype=torch.bfloat16)
+
+        converted = tensor_to_float_numpy(values)
+
+        self.assertEqual(converted.dtype.name, "float32")
+        self.assertEqual(converted.tolist(), [0.25, 0.75])
 
 
 @unittest.skipUnless(

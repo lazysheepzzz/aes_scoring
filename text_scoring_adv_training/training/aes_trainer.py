@@ -177,6 +177,11 @@ def build_adamw_parameter_groups(
     ]
 
 
+def tensor_to_float_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert CUDA/autocast outputs to a NumPy-compatible float array."""
+    return tensor.detach().float().cpu().numpy()
+
+
 # ---------------------------------------------------------------------------
 # HotFlip: one row
 # ---------------------------------------------------------------------------
@@ -412,8 +417,8 @@ class AESAdversarialTrainer:
                     input_ids=b["input_ids"],
                     attention_mask=b["attention_mask"],
                 ).logits.squeeze(-1)
-            preds.extend(logits.cpu().numpy())
-            labels_list.extend(b["labels"].cpu().numpy())
+            preds.extend(tensor_to_float_numpy(logits))
+            labels_list.extend(tensor_to_float_numpy(b["labels"]))
         preds, labels_list = np.array(preds), np.array(labels_list)
         metrics = {"qwk": compute_qwk(labels_list, preds),
                     "mae": float(np.mean(np.abs(preds - labels_list))),

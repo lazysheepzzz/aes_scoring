@@ -73,7 +73,7 @@ ASR 都使用逐篇 `score_single` 和相同的 `delta >= 0.1` 口径，可以�
 | `evaluate_aes_checkpoint.py` | 对任意 B0/C0/D checkpoint 计算 clean 指标和 HotFlip ASR |
 | `eval_hotflip_defended.py` | 旧名称兼容入口；由 `evaluate_aes_checkpoint.py` 调用 |
 
-训练和评估入口均支持 `--help` 和 `--dry-run`。在训练机 C 上先激活 `aes`
+训练和评估入口均支持 `--help` 和 `--dry-run`。在训练机 C 上先激活 `xjj_aes`
 Conda 环境，入口随后使用当前 Python 解释器。路径参数均可通过命令行覆盖。
 
 ### 第二阶段成对训练
@@ -120,7 +120,7 @@ checkpoint 选择规则。唯一的训练差异是：
 | C（训练机） | 从 GitHub pull 后执行训练与评估 |
 | C 的 GPU | RTX 3090 24GB |
 | C 的代码路径 | `E:\xjj\aes_scoring` |
-| C 的 Conda 环境 | `aes` |
+| C 的 Conda 环境 | `xjj_aes` |
 | B0 checkpoint | `E:\xjj\aes_scoring\deberta_checkpoints\fold0_best` |
 | 训练集 | `E:\xjj\aes_scoring\data\train_fold0.csv`（16153 条） |
 | benchmark | `E:\xjj\aes_scoring\data\valid_fold0.csv`（1154 条） |
@@ -140,7 +140,7 @@ checkpoint 选择规则。唯一的训练差异是：
 ```powershell
 Set-Location E:\xjj\aes_scoring
 git pull
-conda activate aes
+conda activate xjj_aes
 python -c "import torch; print(torch.__version__); print(torch.cuda.get_device_name(0)); print('bf16:', torch.cuda.is_bf16_supported())"
 Test-Path .\deberta_checkpoints\fold0_best
 Test-Path .\data\train_fold0.csv
