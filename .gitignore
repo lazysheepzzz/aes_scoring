@@ -5,3 +5,4 @@ venv/
 .idea/
 .vscode/
 deberta_checkpoints
+*.egg-info/
