@@ -87,11 +87,9 @@ D_HOTFLIP 相对 C0：
 | `run_aes_attacks.py` | 通用攻击入口（调用 `evaluation/aes/run_attacks.py`） |
 | `run_aes_clean_continuation_training.py` | C0 干净续训入口 |
 | `run_aes_hotflip_adv_training.py` | D_HOTFLIP 对抗训练入口 |
-| `run_aes_rudimentary_adv_training.py` | D_RUDIMENTARY 对抗训练入口 |
-| `aes_stage2_training_launcher.py` | C0、D_HOTFLIP、D_RUDIMENTARY 共用的第二阶段参数、校验和启动逻辑 |
+| `aes_stage2_training_launcher.py` | C0 与各防御共用的第二阶段参数、校验和启动逻辑 |
 | `evaluate_aes_checkpoint.py` | 对任意 B0/C0/D checkpoint 计算 clean 指标和指定攻击 ASR |
 | `select_aes_hotflip_defense_checkpoint.py` | 用 clean QWK 门控和固定 256 篇子集 HotFlip ASR 选择 D_HOTFLIP checkpoint |
-| `select_aes_rudimentary_defense_checkpoint.py` | 用相同门控和固定子集 Rudimentary ASR 选择 D_RUDIMENTARY checkpoint |
 | `eval_hotflip_defended.py` | 旧名称兼容入口；由 `evaluate_aes_checkpoint.py` 调用 |
 
 训练和评估入口均支持 `--help` 和 `--dry-run`。在训练机 C 上先激活 `xjj_aes`
@@ -231,6 +229,7 @@ seed 42 验收通过后，再按相同顺序运行 seed 43 和 44。每个 seed 
 
 ### 7. Rudimentary 主实验
 
-Rudimentary 的当前正式入口、D_RUDIMENTARY 训练、checkpoint 选择和四模型
-评估命令见 `rudimentary/PLAN.md`。旧
+Rudimentary 的用户入口统一放在 `rudimentary/`；当前正式攻击、
+D_RUDIMENTARY 训练、checkpoint 选择和四模型评估命令见
+`rudimentary/PLAN.md`。旧
 `rudimentary_unified_thresh_result.json` 只作 sanity check，不直接进入主表。

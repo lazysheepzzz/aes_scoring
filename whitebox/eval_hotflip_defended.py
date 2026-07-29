@@ -52,15 +52,17 @@ def _configure_environment(args: argparse.Namespace) -> None:
     os.environ["HF_HOME"] = str(args.hf_home)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(default_attack: str = "hotflip") -> argparse.ArgumentParser:
+    if default_attack not in ("hotflip", "rudimentary"):
+        raise ValueError(f"Unsupported default attack: {default_attack}")
     parser = argparse.ArgumentParser(
         description="Evaluate clean QWK/MAE and adversarial ASR for an AES checkpoint."
     )
     parser.add_argument(
         "--attack",
         choices=("hotflip", "rudimentary"),
-        default="hotflip",
-        help="Attack evaluated after clean metrics (default: hotflip).",
+        default=default_attack,
+        help=f"Attack evaluated after clean metrics (default: {default_attack}).",
     )
     parser.add_argument(
         "--checkpoint",
@@ -324,8 +326,8 @@ def _attack_command(args: argparse.Namespace) -> list[str]:
     return command
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(default_attack: str = "hotflip") -> int:
+    args = build_parser(default_attack).parse_args()
     if args.n_essays <= 0:
         raise ValueError("n_essays must be greater than zero")
     if args.batch_size <= 0:

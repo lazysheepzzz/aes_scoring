@@ -32,6 +32,9 @@ from whitebox.aes_stage2_training_launcher import (
     build_config,
     build_parser,
 )
+from whitebox.eval_hotflip_defended import (
+    build_parser as build_evaluation_parser,
+)
 from whitebox.select_aes_hotflip_defense_checkpoint import (
     build_parser as build_selection_parser,
     create_or_load_debug_subset,
@@ -371,6 +374,11 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
 
 
 class AESCheckpointSelectionTest(unittest.TestCase):
+    def test_rudimentary_evaluator_has_rudimentary_default(self):
+        args = build_evaluation_parser("rudimentary").parse_args([])
+
+        self.assertEqual(args.attack, "rudimentary")
+
     def test_rudimentary_selector_uses_separate_readable_output_paths(self):
         args = build_selection_parser("rudimentary").parse_args([])
 

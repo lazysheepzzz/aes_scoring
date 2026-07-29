@@ -14,9 +14,19 @@ AES 专用新增逻辑：
 
 - `text_scoring_adv_training/evaluation/aes/attacks/rudimentary.py`
 - `text_scoring_adv_training/training/aes_trainer.py`
-- `whitebox/run_aes_rudimentary_adv_training.py`
-- `whitebox/select_aes_rudimentary_defense_checkpoint.py`
-- `whitebox/evaluate_aes_checkpoint.py`
+- `rudimentary/run_aes_rudimentary_adv_training.py`
+- `rudimentary/select_aes_rudimentary_defense_checkpoint.py`
+- `rudimentary/evaluate_aes_rudimentary.py`
+
+目录职责：
+
+| 位置 | 职责 |
+|---|---|
+| `rudimentary/` | Rudimentary 的当前用户入口、运行说明和历史资产 |
+| `text_scoring_adv_training/evaluation/aes/attacks/` | 可复用的 AES 攻击实现 |
+| `text_scoring_adv_training/training/` | 多种防御共用的训练实现 |
+| `text_scoring_adv_training/evaluation/robustness_tests/common/` | 论文原始通用源码，保持不修改 |
+| `whitebox/` | HotFlip 白盒实验入口及跨方法共享的旧兼容入口 |
 
 ## 正式攻击协议
 
@@ -60,7 +70,7 @@ MSE 加权单边分数膨胀损失，weight=1.0、tolerance=0.05，与 D_HOTFLIP
 ### 1. dry-run
 
 ```powershell
-python .\whitebox\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42 --dry-run
+python .\rudimentary\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42 --dry-run
 ```
 
 确认 `training_mode` 为 `rudimentary_defense`，`use_rudimentary_edits` 为
@@ -69,7 +79,7 @@ python .\whitebox\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\o
 ### 2. 训练 D_RUDIMENTARY
 
 ```powershell
-python .\whitebox\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42
+python .\rudimentary\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42
 ```
 
 不要与其他训练或攻击在同一张 RTX 3090 上并行运行。
@@ -77,7 +87,7 @@ python .\whitebox\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\o
 ### 3. 选择 checkpoint
 
 ```powershell
-python .\whitebox\select_aes_rudimentary_defense_checkpoint.py
+python .\rudimentary\select_aes_rudimentary_defense_checkpoint.py
 ```
 
 选择器复用固定的 256 篇 `prompt_name + score` 分层子集。先要求完整 clean
@@ -94,10 +104,10 @@ outputs\aes_rudimentary_checkpoint_selection_seed42\best_checkpoint.json
 $hotflipSelected = (Get-Content .\outputs\aes_hotflip_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
 $rudimentarySelected = (Get-Content .\outputs\aes_rudimentary_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
 
-python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint .\deberta_checkpoints\fold0_best --out .\outputs\eval_rudimentary_b0_seed42 --seed 42
-python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint .\outputs\aes_clean_continuation_seed42\best --out .\outputs\eval_rudimentary_c0_seed42 --seed 42
-python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint $hotflipSelected --out .\outputs\eval_rudimentary_hotflip_defense_seed42 --seed 42
-python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint $rudimentarySelected --out .\outputs\eval_rudimentary_defense_seed42 --seed 42
+python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint .\deberta_checkpoints\fold0_best --out .\outputs\eval_rudimentary_b0_seed42 --seed 42
+python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint .\outputs\aes_clean_continuation_seed42\best --out .\outputs\eval_rudimentary_c0_seed42 --seed 42
+python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint $hotflipSelected --out .\outputs\eval_rudimentary_hotflip_defense_seed42 --seed 42
+python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint $rudimentarySelected --out .\outputs\eval_rudimentary_defense_seed42 --seed 42
 ```
 
 四个目录都会生成 `clean_qwk.json`、`asr_summary.json`、

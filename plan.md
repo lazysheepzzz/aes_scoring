@@ -14,8 +14,9 @@
 - C0 seed 42、D_HOTFLIP seed 42 及其正式 HotFlip 评估已完成。
 - Rudimentary 历史文件实际含 1,154 条，但缺少固定 seed、编辑预算、攻击文本
   和运行清单，因此只作 sanity check，不再采用“补跑 20 条”方案。
-- Rudimentary 正式攻击、D_RUDIMENTARY 训练和 checkpoint 选择现已接通；当前
-  可执行命令以 `rudimentary/PLAN.md` 为准。
+- Rudimentary 正式攻击、D_RUDIMENTARY 训练和 checkpoint 选择现已接通；
+  用户入口统一位于 `rudimentary/`，可执行命令以 `rudimentary/PLAN.md`
+  为准。
 - MLM-guided 旧结果仍因跨 tokenizer ID 使用等问题无效，待单独修复。
 
 ---
