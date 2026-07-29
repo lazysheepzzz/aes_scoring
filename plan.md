@@ -865,7 +865,7 @@ D_COMBINED 在 subset 上计算六类攻击的 Macro ASRΔ@0.10，并使用相�
 - [ ] 实现 C0 clean continued control。
 - [ ] 实现六个单攻击 trainer config。
 - [ ] 实现 D_COMBINED 平衡攻击调度器。
-- [ ] 实现 benchmark debugging subset checkpoint 选择。
+- [x] 实现 benchmark debugging subset checkpoint 选择。
 - [ ] 保存 optimizer、scheduler、training state。
 
 ### P3：评估与报告

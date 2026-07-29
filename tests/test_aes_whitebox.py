@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 from text_scoring_adv_training.evaluation.aes.evaluate import (
@@ -22,6 +24,11 @@ from whitebox.aes_stage2_training_launcher import (
     HOTFLIP_DEFENSE,
     build_config,
     build_parser,
+)
+from whitebox.select_aes_hotflip_defense_checkpoint import (
+    create_or_load_debug_subset,
+    discover_checkpoint_candidates,
+    select_best_checkpoint,
 )
 
 
@@ -148,6 +155,89 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
 
         self.assertEqual(converted.dtype.name, "float32")
         self.assertEqual(converted.tolist(), [0.25, 0.75])
+
+
+class AESCheckpointSelectionTest(unittest.TestCase):
+    def test_discovers_saved_training_checkpoints_in_step_order(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_dir = Path(temporary_directory)
+            for name in ("final", "gstep400", "best", "gstep200", "notes"):
+                candidate = output_dir / name
+                candidate.mkdir()
+                if name != "notes":
+                    (candidate / "model.safetensors").write_bytes(name.encode())
+
+            candidates = discover_checkpoint_candidates(output_dir)
+
+            self.assertEqual(
+                [candidate.name for candidate in candidates],
+                ["gstep200", "gstep400", "best", "final"],
+            )
+
+    def test_selects_lowest_asr_after_clean_qwk_gate(self):
+        rows = [
+            {
+                "checkpoint_name": "gstep200",
+                "clean_qwk": 0.82,
+                "subset_asr": 0.70,
+            },
+            {
+                "checkpoint_name": "gstep400",
+                "clean_qwk": 0.84,
+                "subset_asr": 0.70,
+            },
+            {
+                "checkpoint_name": "final",
+                "clean_qwk": 0.80,
+                "subset_asr": 0.10,
+            },
+        ]
+
+        selected = select_best_checkpoint(rows, minimum_qwk=0.815)
+
+        self.assertEqual(selected["checkpoint_name"], "gstep400")
+
+    def test_debug_subset_is_fixed_and_stratified(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            valid_csv = root / "valid.csv"
+            ids_path = root / "debug_subset_ids.json"
+            subset_csv = root / "debug_subset.csv"
+            rows = []
+            for prompt in ("p1", "p2"):
+                for score in (1, 2):
+                    for index in range(10):
+                        rows.append(
+                            {
+                                "essay_id": f"{prompt}-{score}-{index}",
+                                "prompt_name": prompt,
+                                "score": score,
+                                "full_text": "essay",
+                            }
+                        )
+            pd.DataFrame(rows).to_csv(valid_csv, index=False)
+
+            first = create_or_load_debug_subset(
+                valid_csv,
+                ids_path,
+                subset_csv,
+                subset_size=20,
+                seed=42,
+            )
+            second = create_or_load_debug_subset(
+                valid_csv,
+                ids_path,
+                subset_csv,
+                subset_size=20,
+                seed=999,
+            )
+            subset = pd.read_csv(subset_csv)
+
+            self.assertEqual(first["essay_ids"], second["essay_ids"])
+            self.assertEqual(
+                subset.groupby(["prompt_name", "score"]).size().tolist(),
+                [5, 5, 5, 5],
+            )
 
 
 @unittest.skipUnless(

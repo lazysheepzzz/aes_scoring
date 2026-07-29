@@ -71,6 +71,7 @@ ASR 都使用逐篇 `score_single` 和相同的 `delta >= 0.1` 口径，可以�
 | `run_aes_hotflip_adv_training.py` | D_HOTFLIP 对抗训练入口 |
 | `aes_stage2_training_launcher.py` | C0 与 D_HOTFLIP 共用的第二阶段参数、校验和启动逻辑 |
 | `evaluate_aes_checkpoint.py` | 对任意 B0/C0/D checkpoint 计算 clean 指标和 HotFlip ASR |
+| `select_aes_hotflip_defense_checkpoint.py` | 用 clean QWK 门控和固定 256 篇子集 HotFlip ASR 选择 D_HOTFLIP checkpoint |
 | `eval_hotflip_defended.py` | 旧名称兼容入口；由 `evaluate_aes_checkpoint.py` 调用 |
 
 训练和评估入口均支持 `--help` 和 `--dry-run`。在训练机 C 上先激活 `xjj_aes`
@@ -166,15 +167,31 @@ python .\whitebox\run_aes_clean_continuation_training.py --seed 42 --output-dir 
 python .\whitebox\run_aes_hotflip_adv_training.py --seed 42 --output-dir .\outputs\aes_hotflip_defense_seed42
 ```
 
-不要在同一张 RTX 3090 上并行启动这两个训练。后续评估使用各目录下的
-`best/`，不使用 `final/`。
+不要在同一张 RTX 3090 上并行启动这两个训练。C0 使用 clean QWK 最高的
+`best/`；D_HOTFLIP 不能直接采用 clean-best，必须先执行下一步的鲁棒性选择。
 
-### 4. 使用同一入口评估 B0、C0 和 D_HOTFLIP
+### 4. 选择 D_HOTFLIP checkpoint
+
+```powershell
+python .\whitebox\select_aes_hotflip_defense_checkpoint.py
+```
+
+选择器固定使用按 `prompt_name + score` 分层抽样的 256 篇 debugging subset，
+对完整 benchmark clean QWK 不低于 `C0 QWK - 0.02` 的候选运行 10-step
+HotFlip，并按“subset ASR 最低、同 ASR 时 QWK 更高”选择。程序自动发现
+`gstep*`、`best` 和 `final`，跳过权重完全相同的重复项，并复用已完成的结果。
+选中路径写入：
+
+```text
+outputs/aes_hotflip_checkpoint_selection_seed42/best_checkpoint.json
+```
+
+### 5. 使用同一入口评估 B0、C0 和选中的 D_HOTFLIP
 
 ```powershell
 python .\whitebox\evaluate_aes_checkpoint.py --checkpoint .\deberta_checkpoints\fold0_best --out .\outputs\eval_b0_seed42 --seed 42
 python .\whitebox\evaluate_aes_checkpoint.py --checkpoint .\outputs\aes_clean_continuation_seed42\best --out .\outputs\eval_c0_seed42 --seed 42
-python .\whitebox\evaluate_aes_checkpoint.py --checkpoint .\outputs\aes_hotflip_defense_seed42\best --out .\outputs\eval_hotflip_defense_seed42 --seed 42
+python .\whitebox\evaluate_aes_checkpoint.py --checkpoint <best_checkpoint.json 中的 checkpoint_path> --out .\outputs\eval_hotflip_defense_selected_seed42 --seed 42
 ```
 
 每个评估目录会包含 `clean_qwk.json`、`asr_summary.json`、
@@ -183,7 +200,7 @@ python .\whitebox\evaluate_aes_checkpoint.py --checkpoint .\outputs\aes_hotflip_
 `run_hotflip_asr_undefended.py`、`generate_hotflip_train_adv_data.py` 和旧 v4
 结果保留作历史追溯，不属于当前 B0/C0/D_HOTFLIP 主运行顺序。
 
-### 5. 多随机种子复现
+### 6. 多随机种子复现
 
 seed 42 验收通过后，再按相同顺序运行 seed 43 和 44。每个 seed 使用独立的
 输出目录，并在同一个 seed 内保持 C0 与 D_HOTFLIP 配对。
