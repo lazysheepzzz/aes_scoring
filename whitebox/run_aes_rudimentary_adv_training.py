@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate any AES checkpoint on clean metrics and supported attacks."""
+"""Run D_RUDIMENTARY with the shared AES stage-two configuration."""
 
 from __future__ import annotations
 
@@ -11,8 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from whitebox.eval_hotflip_defended import main
+from whitebox.aes_stage2_training_launcher import (
+    RUDIMENTARY_DEFENSE,
+    main,
+)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(RUDIMENTARY_DEFENSE))

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Shared launcher for paired AES stage-two training runs.
 
-Both the clean-continuation control (C0) and HotFlip defense use this module so
-their optimization settings cannot silently drift apart.  The only intended
-training difference is ``use_hotflip_swaps``.
+C0, HotFlip defense, and Rudimentary defense use this module so their
+optimization settings cannot silently drift apart.
 """
 
 from __future__ import annotations
@@ -31,7 +30,12 @@ ON_SERVER = SERVER_ROOT.exists()
 
 CLEAN_CONTINUATION = "clean_continuation"
 HOTFLIP_DEFENSE = "hotflip_defense"
-TRAINING_MODES = (CLEAN_CONTINUATION, HOTFLIP_DEFENSE)
+RUDIMENTARY_DEFENSE = "rudimentary_defense"
+TRAINING_MODES = (
+    CLEAN_CONTINUATION,
+    HOTFLIP_DEFENSE,
+    RUDIMENTARY_DEFENSE,
+)
 
 
 def _default_path(server_path: str, local_path: Path) -> Path:
@@ -83,20 +87,26 @@ def _default_output_dir(training_mode: str) -> Path:
             "/root/autodl-tmp/aes_clean_continuation",
             REPO_ROOT / "outputs" / "aes_clean_continuation",
         )
+    if training_mode == HOTFLIP_DEFENSE:
+        return _default_path(
+            "/root/autodl-tmp/aes_hotflip_defense",
+            REPO_ROOT / "outputs" / "aes_hotflip_defense",
+        )
     return _default_path(
-        "/root/autodl-tmp/aes_hotflip_defense",
-        REPO_ROOT / "outputs" / "aes_hotflip_defense",
+        "/root/autodl-tmp/aes_rudimentary_defense",
+        REPO_ROOT / "outputs" / "aes_rudimentary_defense",
     )
 
 
 def build_parser(training_mode: str) -> argparse.ArgumentParser:
     if training_mode not in TRAINING_MODES:
         raise ValueError(f"Unknown training mode: {training_mode}")
-    display_name = (
-        "C0 clean-continuation"
-        if training_mode == CLEAN_CONTINUATION
-        else "D_HOTFLIP adversarial"
-    )
+    display_names = {
+        CLEAN_CONTINUATION: "C0 clean-continuation",
+        HOTFLIP_DEFENSE: "D_HOTFLIP adversarial",
+        RUDIMENTARY_DEFENSE: "D_RUDIMENTARY adversarial",
+    }
+    display_name = display_names[training_mode]
     parser = argparse.ArgumentParser(
         description=f"Run paired AES stage-two training: {display_name}."
     )
@@ -170,6 +180,17 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--hotflip-top-k-per-pos", type=int, default=2)
     parser.add_argument("--hotflip-max-candidates", type=int, default=16)
 
+    # Rudimentary defense uses one original-paper edit per selected sample.
+    parser.add_argument("--rudimentary-weight", type=float, default=1.0)
+    parser.add_argument("--rudimentary-tolerance", type=float, default=0.05)
+    parser.add_argument("--rudimentary-fraction", type=float, default=0.5)
+    parser.add_argument("--rudimentary-candidates", type=int, default=16)
+    parser.add_argument(
+        "--rudimentary-improvement-tolerance",
+        type=float,
+        default=1e-6,
+    )
+
     parser.add_argument(
         "--hf-home",
         type=Path,
@@ -222,12 +243,22 @@ def build_config(
         "clean_loss_weight": args.clean_loss_weight,
         "show_progress": not args.no_progress,
         "use_hotflip_swaps": training_mode == HOTFLIP_DEFENSE,
+        "use_rudimentary_edits": (
+            training_mode == RUDIMENTARY_DEFENSE
+        ),
         "hotflip_weight": args.hotflip_weight,
         "hotflip_n_sample_pos": args.hotflip_n_sample_pos,
         "hotflip_top_k_per_pos": args.hotflip_top_k_per_pos,
         "hotflip_max_candidates": args.hotflip_max_candidates,
         "hotflip_fraction": args.hotflip_fraction,
         "hotflip_tolerance": args.hotflip_tolerance,
+        "rudimentary_weight": args.rudimentary_weight,
+        "rudimentary_candidates": args.rudimentary_candidates,
+        "rudimentary_fraction": args.rudimentary_fraction,
+        "rudimentary_tolerance": args.rudimentary_tolerance,
+        "rudimentary_improvement_tolerance": (
+            args.rudimentary_improvement_tolerance
+        ),
     }
 
 
@@ -242,6 +273,7 @@ def validate_config(config: dict[str, Any]) -> None:
         "hotflip_n_sample_pos",
         "hotflip_top_k_per_pos",
         "hotflip_max_candidates",
+        "rudimentary_candidates",
     )
     for field in positive_integer_fields:
         if config[field] <= 0:
@@ -254,12 +286,22 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("warmup_ratio must be between zero and one")
     if not 0.0 <= config["hotflip_fraction"] <= 1.0:
         raise ValueError("hotflip_fraction must be between zero and one")
+    if not 0.0 <= config["rudimentary_fraction"] <= 1.0:
+        raise ValueError("rudimentary_fraction must be between zero and one")
     if config["clean_loss_weight"] <= 0:
         raise ValueError("clean_loss_weight must be greater than zero")
     if config["hotflip_weight"] < 0:
         raise ValueError("hotflip_weight must be non-negative")
     if config["hotflip_tolerance"] < 0:
         raise ValueError("hotflip_tolerance must be non-negative")
+    if config["rudimentary_weight"] < 0:
+        raise ValueError("rudimentary_weight must be non-negative")
+    if config["rudimentary_tolerance"] < 0:
+        raise ValueError("rudimentary_tolerance must be non-negative")
+    if config["rudimentary_improvement_tolerance"] < 0:
+        raise ValueError(
+            "rudimentary_improvement_tolerance must be non-negative"
+        )
     if not 0.0 < config["adam_beta1"] < 1.0:
         raise ValueError("adam_beta1 must be in (0, 1)")
     if not 0.0 < config["adam_beta2"] < 1.0:

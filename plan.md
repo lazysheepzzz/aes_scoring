@@ -4,10 +4,19 @@
 
 - 项目名称：英语作文自动评分中的虚高攻击、跨攻击迁移与组合对抗训练
 - 基础框架：《Unifying Adversarial Robustness and Training Across Text Scoring Models》
-- 当前版本：1.1
+- 当前版本：1.2
 - 建立日期：2026-07-27
 - 维护方式：每次修改实验协议、参数、数据划分、指标定义后，先更新本文件，再运行实验
 - 当前结论：冻结现有 fold0 数据划分；已有 checkpoint 和攻击结果通过资产审计后继续使用；只重跑受代码错误、损失变化、参数缺失直接影响的实验
+
+### 2026-07-29 执行状态补充
+
+- C0 seed 42、D_HOTFLIP seed 42 及其正式 HotFlip 评估已完成。
+- Rudimentary 历史文件实际含 1,154 条，但缺少固定 seed、编辑预算、攻击文本
+  和运行清单，因此只作 sanity check，不再采用“补跑 20 条”方案。
+- Rudimentary 正式攻击、D_RUDIMENTARY 训练和 checkpoint 选择现已接通；当前
+  可执行命令以 `rudimentary/PLAN.md` 为准。
+- MLM-guided 旧结果仍因跨 tokenizer ID 使用等问题无效，待单独修复。
 
 ---
 
@@ -44,7 +53,8 @@
 - `data/train_fold0.csv`：16,153 篇。
 - `data/valid_fold0.csv`：1,154 篇。
 - `deberta_checkpoints/fold0_best/`：当前未防御 DeBERTa checkpoint。
-- Rudimentary：1,134 篇，`ASRΔ@0.10 = 94.97%`，保留逐样本连续分数。
+- Rudimentary：历史文件实际为 1,154 篇，`ASRΔ@0.10 = 94.45%`；仅作
+  sanity check，不进入正式主表。
 - HotFlip undefended：1,154 篇，`ASRΔ@0.10 = 87.78%`，保留逐样本连续分数。
 - HotFlip defended：1,154 篇，`ASRΔ@0.10 = 67.50%`，保留逐样本连续分数。
 - MLM-guided：1,134 篇，已知存在 tokenizer 边界问题，只作为错误分析记录。
@@ -58,7 +68,7 @@
 | 当前未防御 DeBERTa | 完成配置、数据 hash、clean 指标审计；审计通过后登记为 `B0_BASE seed 42` |
 | HotFlip undefended 1,154 条 | 直接复用 `ASRΔ@0.10`、Mean Δ、逐样本 delta；仅为文本质量检查重跑固定 50 条 |
 | HotFlip defended 1,154 条 | 作为旧损失函数结果保留；新损失函数训练完成后只评估新 checkpoint |
-| Rudimentary 1,134 条 | 保留已有 1,134 条；使用相同 checkpoint 和攻击参数补跑索引 1,134–1,153 共 20 条 |
+| Rudimentary 历史 1,154 条 | 仅作 sanity check；使用正式统一入口完整重跑 |
 | MLM-guided 1,134 条 | 修复 tokenizer 后重跑；旧结果不进入主结果表 |
 | Injection、Keyword、Template | 当前没有完整结果，按正式协议首次运行 |
 
@@ -966,7 +976,7 @@ GPU 型号
 ### Phase 2：未防御攻击
 
 1. 复用 B0 seed 42 的 HotFlip 1,154 条结果。
-2. 为 Rudimentary 补跑缺少的 20 条。
+2. 用修复后的统一入口完整重跑 Rudimentary 1,154 条。
 3. 修复后重跑 MLM-guided。
 4. 首次运行 Injection、Keyword、Template。
 5. 从已有逐样本分数重新计算连续和等级指标。

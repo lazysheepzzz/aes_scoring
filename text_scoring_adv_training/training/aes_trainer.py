@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-AES Stage-Two Training — C0 clean continuation and HotFlip defense.
+AES Stage-Two Training — C0 clean continuation and adversarial defenses.
 
-HotFlip mode 每步用当前模型生成梯度引导的 token 替换，计算：
-  Loss = MSE(clean_score, label) + hotflip_weight * one_sided_inflation_loss
+Defense modes use the current model to select one-step score-inflating
+perturbations and optimize:
+  Loss = MSE(clean_score, label) + attack_weight * one_sided_inflation_loss
 
 C0 mode 只计算 clean MSE。通用论文代码保持只读；AES 专用候选筛选和损失
 在本文件中实现。
@@ -31,6 +32,9 @@ from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.evaluation.robustness_tests.common.hotflip import (
     _sample_positions,
     _topk_per_position,
+)
+from text_scoring_adv_training.evaluation.robustness_tests.common.rudimentary_edits import (
+    sample_variants,
 )
 
 
@@ -71,19 +75,35 @@ class AESAdversarialConfig:
     # Backward compatibility for old launcher_config.json files.  The old
     # "margin" is interpreted as the new one-sided tolerance.
     hotflip_margin: Optional[float] = None
+    use_rudimentary_edits: bool = False
+    rudimentary_weight: float = 1.0
+    rudimentary_candidates: int = 16
+    rudimentary_fraction: float = 0.5
+    rudimentary_tolerance: float = 0.05
+    rudimentary_improvement_tolerance: float = 1e-6
 
     def __post_init__(self):
         if self.hotflip_margin is not None:
             self.hotflip_tolerance = float(self.hotflip_margin)
-        if self.training_mode not in ("clean_continuation", "hotflip_defense"):
+        if self.training_mode not in (
+            "clean_continuation",
+            "hotflip_defense",
+            "rudimentary_defense",
+        ):
             raise ValueError(f"Unknown training_mode: {self.training_mode}")
         if self.precision not in ("bfloat16", "float32"):
             raise ValueError(f"Unsupported precision: {self.precision}")
         expected_hotflip = self.training_mode == "hotflip_defense"
+        expected_rudimentary = self.training_mode == "rudimentary_defense"
         if self.use_hotflip_swaps != expected_hotflip:
             raise ValueError(
                 "training_mode and use_hotflip_swaps disagree: "
                 f"{self.training_mode=}, {self.use_hotflip_swaps=}"
+            )
+        if self.use_rudimentary_edits != expected_rudimentary:
+            raise ValueError(
+                "training_mode and use_rudimentary_edits disagree: "
+                f"{self.training_mode=}, {self.use_rudimentary_edits=}"
             )
 
 
@@ -118,7 +138,12 @@ class AESCollator:
         labels = torch.tensor([b["label"] for b in batch], dtype=torch.float)
         enc = self.tokenizer(texts, return_tensors="pt",
                              truncation=True, max_length=self.max_length, padding=True)
-        return {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
+        return {
+            "input_ids": enc["input_ids"],
+            "attention_mask": enc["attention_mask"],
+            "labels": labels,
+            "texts": texts,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +330,97 @@ def run_hotflip_one_row(
 
 
 # ---------------------------------------------------------------------------
+# Rudimentary: one row
+# ---------------------------------------------------------------------------
+
+def run_rudimentary_one_row(
+    text: str,
+    scorer: AESScorer,
+    *,
+    max_candidates: int,
+    max_length: int,
+    device: str,
+    autocast_dtype: Optional[torch.dtype] = None,
+    improvement_tolerance: float = 1e-6,
+) -> Optional[str]:
+    """Select one effective paper-style edit using true current-model scores."""
+    if max_candidates <= 0:
+        raise ValueError("max_candidates must be greater than zero")
+    if improvement_tolerance < 0:
+        raise ValueError("improvement_tolerance must be non-negative")
+
+    tokenizer = scorer.tokenizer
+    original_ids = tokenizer(
+        text,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=max_length,
+    )["input_ids"]
+    if hasattr(original_ids, "tolist"):
+        original_ids = original_ids.tolist()
+    original_ids = tuple(int(token_id) for token_id in original_ids)
+
+    candidates: List[str] = []
+    seen_token_sequences = {original_ids}
+    for candidate in sample_variants(text, max_candidates):
+        if not candidate.strip():
+            continue
+        candidate_ids = tokenizer(
+            candidate,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=max_length,
+        )["input_ids"]
+        if hasattr(candidate_ids, "tolist"):
+            candidate_ids = candidate_ids.tolist()
+        token_sequence = tuple(int(token_id) for token_id in candidate_ids)
+        if token_sequence in seen_token_sequences:
+            continue
+        seen_token_sequences.add(token_sequence)
+        candidates.append(candidate)
+
+    if not candidates:
+        return None
+
+    # Score the original and candidates in one padded batch.  This prevents
+    # dynamic-padding roundoff from being mistaken for an improvement.
+    scored_texts = [text, *candidates]
+    encoded = tokenizer(
+        scored_texts,
+        return_tensors="pt",
+        truncation=True,
+        max_length=max_length,
+        padding=True,
+    )
+    input_ids = encoded["input_ids"].to(device)
+    attention_mask = encoded["attention_mask"].to(device)
+
+    model = scorer.model
+    was_training = model.training
+    try:
+        model.eval()
+        autocast_context = (
+            torch.autocast(device_type="cuda", dtype=autocast_dtype)
+            if autocast_dtype is not None and str(device).startswith("cuda")
+            else nullcontext()
+        )
+        with torch.no_grad(), autocast_context:
+            scores = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            ).logits.squeeze(-1)
+        best_candidate_index = int(torch.argmax(scores[1:]).item()) + 1
+        if (
+            float(scores[best_candidate_index].item())
+            <= float(scores[0].item()) + improvement_tolerance
+        ):
+            return None
+        return candidates[best_candidate_index - 1]
+    finally:
+        model.train(was_training)
+
+
+# ---------------------------------------------------------------------------
 # Trainer
 # ---------------------------------------------------------------------------
 
@@ -397,11 +513,15 @@ class AESAdversarialTrainer:
             return max(0.0, float(total_steps - step) / max(1, total_steps - warmup_steps))
         return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
-    def _hotflip_mask(self, batch_size: int) -> List[bool]:
+    def _adversarial_mask(self, batch_size: int) -> List[bool]:
         cfg = self.config
-        if not cfg.use_hotflip_swaps:
+        if cfg.use_hotflip_swaps:
+            fraction = cfg.hotflip_fraction
+        elif cfg.use_rudimentary_edits:
+            fraction = cfg.rudimentary_fraction
+        else:
             return [False] * batch_size
-        n = int(batch_size * cfg.hotflip_fraction)
+        n = int(batch_size * fraction)
         indices = random.sample(range(batch_size), min(n, batch_size))
         return [i in indices for i in range(batch_size)]
 
@@ -419,7 +539,12 @@ class AESAdversarialTrainer:
             dynamic_ncols=True,
             disable=True if not self.config.show_progress else None,
         ):
-            b = {k: v.to(self.device) for k, v in batch.items()}
+            b = {
+                key: value.to(self.device)
+                if isinstance(value, torch.Tensor)
+                else value
+                for key, value in batch.items()
+            }
             with self._autocast_context():
                 logits = self.scorer.model(
                     input_ids=b["input_ids"],
@@ -434,7 +559,7 @@ class AESAdversarialTrainer:
         self.scorer.model.train()
         return metrics
 
-    def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+    def train_step(self, batch: Dict[str, Any]) -> Dict[str, float]:
         cfg = self.config
         b = {k: (v.to(self.device) if isinstance(v, torch.Tensor) else v) for k, v in batch.items()}
         labels = b["labels"]
@@ -446,16 +571,20 @@ class AESAdversarialTrainer:
                 attention_mask=b["attention_mask"],
             ).logits.squeeze(-1)
 
-        # --- HotFlip ---
-        hot_mask = self._hotflip_mask(b["input_ids"].size(0))
-        n_hot = sum(hot_mask)
+        # --- One-step adversarial candidate generation ---
+        adversarial_mask = self._adversarial_mask(b["input_ids"].size(0))
+        adversarial_indices = [
+            index
+            for index, selected in enumerate(adversarial_mask)
+            if selected
+        ]
+        loss_indices = list(adversarial_indices)
 
-        if cfg.use_hotflip_swaps and n_hot > 0:
-            hot_indices = [i for i, m in enumerate(hot_mask) if m]
+        if cfg.use_hotflip_swaps and adversarial_indices:
             # Run hotflip per-row
             adv_ids_list = []
             for i in range(b["input_ids"].size(0)):
-                if hot_mask[i]:
+                if adversarial_mask[i]:
                     swap = run_hotflip_one_row(
                         b["input_ids"][i], b["attention_mask"][i],
                         self.scorer, self.specials,
@@ -473,28 +602,68 @@ class AESAdversarialTrainer:
                     input_ids=hf_ids,
                     attention_mask=b["attention_mask"],
                 ).logits.squeeze(-1)
+        elif cfg.use_rudimentary_edits and adversarial_indices:
+            adversarial_texts = list(b["texts"])
+            changed_indices: List[int] = []
+            for index in adversarial_indices:
+                perturbed_text = run_rudimentary_one_row(
+                    b["texts"][index],
+                    self.scorer,
+                    max_candidates=cfg.rudimentary_candidates,
+                    max_length=cfg.max_length,
+                    device=self.device,
+                    autocast_dtype=self.autocast_dtype,
+                    improvement_tolerance=(
+                        cfg.rudimentary_improvement_tolerance
+                    ),
+                )
+                if perturbed_text is not None:
+                    adversarial_texts[index] = perturbed_text
+                    changed_indices.append(index)
+
+            loss_indices = changed_indices
+            if changed_indices:
+                adversarial_batch = self.tokenizer(
+                    adversarial_texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=cfg.max_length,
+                    padding=True,
+                )
+                with self._autocast_context():
+                    adv_logits = self.scorer.model(
+                        input_ids=adversarial_batch["input_ids"].to(
+                            self.device
+                        ),
+                        attention_mask=adversarial_batch[
+                            "attention_mask"
+                        ].to(self.device),
+                    ).logits.squeeze(-1)
+            else:
+                adv_logits = clean_logits.detach()
         else:
             adv_logits = clean_logits.detach()
 
         # --- Losses ---
         base_loss = F.mse_loss(clean_logits.float(), labels.float())
 
-        if cfg.use_hotflip_swaps and n_hot > 0:
-            hot_indices = [i for i, m in enumerate(hot_mask) if m]
-            if hot_indices:
-                adversarial_loss = one_sided_score_inflation_loss(
-                    clean_logits[hot_indices].float(),
-                    adv_logits[hot_indices].float(),
-                    labels[hot_indices].float(),
-                    tolerance=cfg.hotflip_tolerance,
-                )
-                total_loss = (
-                    cfg.clean_loss_weight * base_loss
-                    + cfg.hotflip_weight * adversarial_loss
-                )
+        if loss_indices:
+            if cfg.use_hotflip_swaps:
+                attack_weight = cfg.hotflip_weight
+                attack_tolerance = cfg.hotflip_tolerance
             else:
-                adversarial_loss = torch.tensor(0.0, device=self.device)
-                total_loss = cfg.clean_loss_weight * base_loss
+                attack_weight = cfg.rudimentary_weight
+                attack_tolerance = cfg.rudimentary_tolerance
+            adversarial_loss = one_sided_score_inflation_loss(
+                clean_logits[loss_indices].float(),
+                adv_logits[loss_indices].float(),
+                labels[loss_indices].float(),
+                tolerance=attack_tolerance,
+            )
+            total_loss = (
+                cfg.clean_loss_weight * base_loss
+                + attack_weight * adversarial_loss
+            )
         else:
             adversarial_loss = torch.tensor(0.0, device=self.device)
             total_loss = cfg.clean_loss_weight * base_loss
@@ -505,8 +674,9 @@ class AESAdversarialTrainer:
         metrics = {
             "base_loss": base_loss.item(),
             "hotflip_loss": adversarial_loss.item(),
+            "adversarial_loss": adversarial_loss.item(),
             "total_loss": total_loss.item(),
-            "n_hot": n_hot,
+            "n_adversarial": len(loss_indices),
         }
         return metrics
 
@@ -569,7 +739,7 @@ class AESAdversarialTrainer:
                         gstep=global_step,
                         loss=f"{metrics['total_loss']:.4f}",
                         base=f"{metrics['base_loss']:.4f}",
-                        hotflip=f"{metrics['hotflip_loss']:.4f}",
+                        adv=f"{metrics['adversarial_loss']:.4f}",
                         lr=f"{lr:.2e}",
                     )
 

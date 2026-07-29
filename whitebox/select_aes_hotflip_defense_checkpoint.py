@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Select a D_HOTFLIP checkpoint using clean QWK and subset HotFlip ASR.
+"""Select a defense checkpoint using clean QWK and matching subset ASR.
 
 The selection protocol follows plan.md:
 
 1. Build or reuse a fixed 256-essay subset stratified by prompt and score.
-2. Evaluate every saved D_HOTFLIP checkpoint on the full clean benchmark.
+2. Evaluate every saved defense checkpoint on the full clean benchmark.
 3. Keep checkpoints whose QWK is at least C0 QWK minus 0.02.
-4. Run a 10-step HotFlip attack on the fixed subset for eligible checkpoints.
+4. Run a 10-step matching attack on the fixed subset for eligible checkpoints.
 5. Select the lowest-ASR checkpoint, breaking ties by higher clean QWK.
 
 Per-checkpoint results are reusable, so an interrupted selection run can be
@@ -27,6 +27,7 @@ from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ENTRYPOINT = REPO_ROOT / "whitebox" / "evaluate_aes_checkpoint.py"
+SUPPORTED_ATTACKS = ("hotflip", "rudimentary")
 
 
 def _sha256(path: Path) -> str:
@@ -318,6 +319,8 @@ def _base_evaluation_command(
         str(EVALUATION_ENTRYPOINT),
         "--checkpoint",
         str(checkpoint.resolve()),
+        "--attack",
+        args.attack,
         "--valid",
         str(valid_csv.resolve()),
         "--out",
@@ -399,14 +402,30 @@ def _evaluate_subset_if_needed(
     _run(command, dry_run=args.dry_run)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Select D_HOTFLIP by clean QWK gate and subset HotFlip ASR."
+def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
+    if attack not in SUPPORTED_ATTACKS:
+        raise ValueError(f"Unsupported checkpoint-selection attack: {attack}")
+    defense_name = (
+        "aes_hotflip_defense_seed42"
+        if attack == "hotflip"
+        else "aes_rudimentary_defense_seed42"
     )
+    selection_name = (
+        "aes_hotflip_checkpoint_selection_seed42"
+        if attack == "hotflip"
+        else "aes_rudimentary_checkpoint_selection_seed42"
+    )
+    parser = argparse.ArgumentParser(
+        description=(
+            f"Select the {attack} defense by clean QWK gate and "
+            f"subset {attack} ASR."
+        )
+    )
+    parser.set_defaults(attack=attack)
     parser.add_argument(
         "--defense-output-dir",
         type=Path,
-        default=REPO_ROOT / "outputs" / "aes_hotflip_defense_seed42",
+        default=REPO_ROOT / "outputs" / defense_name,
     )
     parser.add_argument(
         "--c0-checkpoint",
@@ -429,7 +448,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=(
             REPO_ROOT
             / "outputs"
-            / "aes_hotflip_checkpoint_selection_seed42"
+            / selection_name
         ),
     )
     parser.add_argument(
@@ -505,8 +524,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("max_token_edit_rate must be in (0, 1]")
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(attack: str = "hotflip") -> int:
+    args = build_parser(attack).parse_args()
     _validate_args(args)
 
     if not args.c0_checkpoint.is_dir():
@@ -642,7 +661,8 @@ def main() -> int:
             "subset_size": args.subset_size,
             "subset_seed": args.subset_seed,
             "attack_seed": args.seed,
-            "selection_hotflip_steps": args.selection_steps,
+            "selection_attack": args.attack,
+            "selection_steps": args.selection_steps,
             "success_threshold": args.success_threshold,
         },
         "selected_checkpoint": selected,

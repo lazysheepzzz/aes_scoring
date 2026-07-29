@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate any AES checkpoint on clean metrics and supported attacks."""
+"""Select D_RUDIMENTARY using clean QWK and subset Rudimentary ASR."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from whitebox.eval_hotflip_defended import main
+from whitebox.select_aes_hotflip_defense_checkpoint import main
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main("rudimentary"))

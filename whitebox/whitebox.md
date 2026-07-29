@@ -87,9 +87,11 @@ D_HOTFLIP 相对 C0：
 | `run_aes_attacks.py` | 通用攻击入口（调用 `evaluation/aes/run_attacks.py`） |
 | `run_aes_clean_continuation_training.py` | C0 干净续训入口 |
 | `run_aes_hotflip_adv_training.py` | D_HOTFLIP 对抗训练入口 |
-| `aes_stage2_training_launcher.py` | C0 与 D_HOTFLIP 共用的第二阶段参数、校验和启动逻辑 |
-| `evaluate_aes_checkpoint.py` | 对任意 B0/C0/D checkpoint 计算 clean 指标和 HotFlip ASR |
+| `run_aes_rudimentary_adv_training.py` | D_RUDIMENTARY 对抗训练入口 |
+| `aes_stage2_training_launcher.py` | C0、D_HOTFLIP、D_RUDIMENTARY 共用的第二阶段参数、校验和启动逻辑 |
+| `evaluate_aes_checkpoint.py` | 对任意 B0/C0/D checkpoint 计算 clean 指标和指定攻击 ASR |
 | `select_aes_hotflip_defense_checkpoint.py` | 用 clean QWK 门控和固定 256 篇子集 HotFlip ASR 选择 D_HOTFLIP checkpoint |
+| `select_aes_rudimentary_defense_checkpoint.py` | 用相同门控和固定子集 Rudimentary ASR 选择 D_RUDIMENTARY checkpoint |
 | `eval_hotflip_defended.py` | 旧名称兼容入口；由 `evaluate_aes_checkpoint.py` 调用 |
 
 训练和评估入口均支持 `--help` 和 `--dry-run`。在训练机 C 上先激活 `xjj_aes`
@@ -125,9 +127,11 @@ checkpoint 选择规则。唯一的训练差异是：
 | 文件 | 作用 |
 |------|------|
 | `text_scoring_adv_training/evaluation/aes/attacks/hotflip.py` | AES 专用 HotFlipAttack；候选文本重新编码并真实评分 |
+| `text_scoring_adv_training/evaluation/aes/attacks/rudimentary.py` | AES 专用迭代 Rudimentary；真实评分、编辑预算和完整记录 |
 | `text_scoring_adv_training/evaluation/aes/scorer.py` | AES DeBERTa 评分封装，统一使用 right padding |
-| `text_scoring_adv_training/training/aes_trainer.py` | AES 专用在线对抗训练和单边虚高损失 |
+| `text_scoring_adv_training/training/aes_trainer.py` | AES 专用 HotFlip/Rudimentary 在线对抗训练和单边虚高损失 |
 | `text_scoring_adv_training/evaluation/robustness_tests/common/hotflip.py` | 原论文通用 HotFlip 辅助函数；保持不修改 |
+| `text_scoring_adv_training/evaluation/robustness_tests/common/rudimentary_edits.py` | 原论文 Rudimentary 编辑函数；保持不修改 |
 | `text_scoring_adv_training/training/losses.py` | 原论文通用损失文件；保持不修改 |
 
 ---
@@ -224,3 +228,9 @@ python .\whitebox\evaluate_aes_checkpoint.py --checkpoint <best_checkpoint.json 
 
 seed 42 验收通过后，再按相同顺序运行 seed 43 和 44。每个 seed 使用独立的
 输出目录，并在同一个 seed 内保持 C0 与 D_HOTFLIP 配对。
+
+### 7. Rudimentary 主实验
+
+Rudimentary 的当前正式入口、D_RUDIMENTARY 训练、checkpoint 选择和四模型
+评估命令见 `rudimentary/PLAN.md`。旧
+`rudimentary_unified_thresh_result.json` 只作 sanity check，不直接进入主表。

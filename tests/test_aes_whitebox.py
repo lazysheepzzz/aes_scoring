@@ -4,10 +4,15 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 import torch
 
+from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import (
+    IterativeRudimentaryAttack,
+)
 from text_scoring_adv_training.evaluation.aes.evaluate import (
     AttackResult,
     evaluate_attack,
@@ -17,15 +22,18 @@ from text_scoring_adv_training.training.aes_trainer import (
     AESAdversarialConfig,
     build_adamw_parameter_groups,
     one_sided_score_inflation_loss,
+    run_rudimentary_one_row,
     tensor_to_float_numpy,
 )
 from whitebox.aes_stage2_training_launcher import (
     CLEAN_CONTINUATION,
     HOTFLIP_DEFENSE,
+    RUDIMENTARY_DEFENSE,
     build_config,
     build_parser,
 )
 from whitebox.select_aes_hotflip_defense_checkpoint import (
+    build_parser as build_selection_parser,
     create_or_load_debug_subset,
     discover_checkpoint_candidates,
     select_best_checkpoint,
@@ -39,6 +47,31 @@ class _FakeScorer:
 
     def score_batch(self, texts, batch_size=32):
         return [self.scores[text] for text in texts]
+
+
+class _FakeTokenizer:
+    all_special_ids = []
+
+    def __init__(self, token_count: int):
+        self.token_count = token_count
+
+    def __call__(self, text, **_kwargs):
+        token_offset = sum(ord(character) for character in text) % 1000
+        return {
+            "input_ids": [
+                token_offset + index
+                for index in range(self.token_count)
+            ]
+        }
+
+
+class _FakeAttackScorer(_FakeScorer):
+    def __init__(self, scores: dict[str, float], token_count: int):
+        super().__init__(scores)
+        self.tokenizer = _FakeTokenizer(token_count)
+
+    def score_single(self, text):
+        return self.scores[text]
 
 
 class AESWhiteboxMetricsTest(unittest.TestCase):
@@ -91,6 +124,117 @@ class AESWhiteboxMetricsTest(unittest.TestCase):
         self.assertEqual(result.details[0]["history"][0]["step"], 0)
 
 
+class AESRudimentaryAttackTest(unittest.TestCase):
+    def test_iterative_search_uses_true_scores_and_stops_at_threshold(self):
+        scorer = _FakeAttackScorer(
+            {
+                "original": 1.0,
+                "edit-one": 1.06,
+                "edit-two": 1.12,
+            },
+            token_count=20,
+        )
+        variants = {
+            "original": ["edit-one"],
+            "edit-one": ["edit-two"],
+        }
+        attack = IterativeRudimentaryAttack(
+            scorer,
+            n_steps=30,
+            candidates_per_step=16,
+            threshold=0.1,
+            max_token_edit_rate=0.1,
+        )
+
+        with patch(
+            "text_scoring_adv_training.evaluation.aes.attacks."
+            "rudimentary.sample_variants",
+            side_effect=lambda text, _count: variants.get(text, []),
+        ):
+            perturbed, history = attack.attack("original")
+
+        self.assertEqual(perturbed, "edit-two")
+        self.assertEqual(len(history), 2)
+        self.assertAlmostEqual(history[-1]["delta"], 0.12)
+        self.assertEqual(history[-1]["accepted_edit_count"], 2)
+        self.assertEqual(history[-1]["max_edits"], 2)
+
+    def test_edit_budget_limits_accepted_operations(self):
+        scorer = _FakeAttackScorer(
+            {
+                "original": 1.0,
+                "edit-one": 1.05,
+                "edit-two": 1.20,
+            },
+            token_count=10,
+        )
+        variants = {
+            "original": ["edit-one"],
+            "edit-one": ["edit-two"],
+        }
+        attack = IterativeRudimentaryAttack(
+            scorer,
+            n_steps=30,
+            candidates_per_step=16,
+            threshold=0.5,
+            max_token_edit_rate=0.1,
+        )
+
+        with patch(
+            "text_scoring_adv_training.evaluation.aes.attacks."
+            "rudimentary.sample_variants",
+            side_effect=lambda text, _count: variants.get(text, []),
+        ):
+            perturbed, history = attack.attack("original")
+
+        self.assertEqual(perturbed, "edit-one")
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["max_edits"], 1)
+        self.assertTrue(history[0]["changes"])
+
+    def test_invalid_rudimentary_parameters_are_rejected(self):
+        scorer = _FakeAttackScorer({"original": 1.0}, token_count=10)
+
+        with self.assertRaises(ValueError):
+            IterativeRudimentaryAttack(scorer, beam_size=2)
+        with self.assertRaises(ValueError):
+            IterativeRudimentaryAttack(
+                scorer,
+                max_token_edit_rate=0,
+            )
+        with self.assertRaises(ValueError):
+            IterativeRudimentaryAttack(
+                scorer,
+                improvement_tolerance=-1,
+            )
+
+    def test_token_equivalent_candidate_is_not_counted_as_an_edit(self):
+        class _EquivalentTokenizer(_FakeTokenizer):
+            def __call__(self, _text, **_kwargs):
+                return {"input_ids": list(range(self.token_count))}
+
+        scorer = _FakeAttackScorer(
+            {"original": 1.0, "trailing-space ": 1.0000001},
+            token_count=20,
+        )
+        scorer.tokenizer = _EquivalentTokenizer(20)
+        attack = IterativeRudimentaryAttack(
+            scorer,
+            n_steps=1,
+            candidates_per_step=1,
+        )
+
+        with patch(
+            "text_scoring_adv_training.evaluation.aes.attacks."
+            "rudimentary.sample_variants",
+            return_value=["trailing-space "],
+        ):
+            perturbed, history = attack.attack("original")
+
+        self.assertEqual(perturbed, "original")
+        self.assertEqual(history, [])
+
+
 class AESWhiteboxTrainingTest(unittest.TestCase):
     def test_one_sided_loss_does_not_push_clean_score_up(self):
         clean = torch.tensor([1.0], requires_grad=True)
@@ -112,25 +256,93 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         config = AESAdversarialConfig(hotflip_margin=0.1)
         self.assertEqual(config.hotflip_tolerance, 0.1)
 
-    def test_c0_and_hotflip_share_all_optimization_parameters(self):
+    def test_c0_and_defenses_share_all_optimization_parameters(self):
         clean_args = build_parser(CLEAN_CONTINUATION).parse_args([])
         hotflip_args = build_parser(HOTFLIP_DEFENSE).parse_args([])
+        rudimentary_args = build_parser(RUDIMENTARY_DEFENSE).parse_args([])
         clean_config = build_config(clean_args, CLEAN_CONTINUATION)
         hotflip_config = build_config(hotflip_args, HOTFLIP_DEFENSE)
+        rudimentary_config = build_config(
+            rudimentary_args,
+            RUDIMENTARY_DEFENSE,
+        )
 
         intentionally_different = {
             "training_mode",
             "output_dir",
             "use_hotflip_swaps",
+            "use_rudimentary_edits",
         }
         shared_keys = set(clean_config) - intentionally_different
         self.assertEqual(shared_keys, set(hotflip_config) - intentionally_different)
+        self.assertEqual(
+            shared_keys,
+            set(rudimentary_config) - intentionally_different,
+        )
         for key in shared_keys:
             self.assertEqual(clean_config[key], hotflip_config[key], key)
+            self.assertEqual(
+                clean_config[key],
+                rudimentary_config[key],
+                key,
+            )
 
         self.assertFalse(clean_config["use_hotflip_swaps"])
+        self.assertFalse(clean_config["use_rudimentary_edits"])
         self.assertTrue(hotflip_config["use_hotflip_swaps"])
+        self.assertFalse(hotflip_config["use_rudimentary_edits"])
+        self.assertFalse(rudimentary_config["use_hotflip_swaps"])
+        self.assertTrue(rudimentary_config["use_rudimentary_edits"])
         self.assertEqual(clean_config["precision"], "bfloat16")
+
+    def test_rudimentary_training_selects_true_best_effective_edit(self):
+        class _TrainingTokenizer:
+            token_ids = {
+                "original": [1, 2],
+                "weaker": [1, 3],
+                "stronger": [1, 4],
+            }
+
+            def __call__(self, texts, return_tensors=None, padding=False, **_kwargs):
+                if isinstance(texts, str):
+                    return {"input_ids": list(self.token_ids[texts])}
+                rows = [self.token_ids[text] for text in texts]
+                return {
+                    "input_ids": torch.tensor(rows, dtype=torch.long),
+                    "attention_mask": torch.ones(
+                        (len(rows), len(rows[0])),
+                        dtype=torch.long,
+                    ),
+                }
+
+        class _ScoreModel(torch.nn.Module):
+            def forward(self, input_ids, attention_mask):
+                del attention_mask
+                return SimpleNamespace(
+                    logits=input_ids.float().sum(dim=1, keepdim=True)
+                )
+
+        scorer = SimpleNamespace(
+            tokenizer=_TrainingTokenizer(),
+            model=_ScoreModel(),
+        )
+        scorer.model.train()
+
+        with patch(
+            "text_scoring_adv_training.training.aes_trainer."
+            "sample_variants",
+            return_value=["weaker", "stronger"],
+        ):
+            selected = run_rudimentary_one_row(
+                "original",
+                scorer,
+                max_candidates=2,
+                max_length=1024,
+                device="cpu",
+            )
+
+        self.assertEqual(selected, "stronger")
+        self.assertTrue(scorer.model.training)
 
     def test_adamw_excludes_bias_and_normalization_vectors_from_decay(self):
         model = torch.nn.Sequential(
@@ -159,6 +371,19 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
 
 
 class AESCheckpointSelectionTest(unittest.TestCase):
+    def test_rudimentary_selector_uses_separate_readable_output_paths(self):
+        args = build_selection_parser("rudimentary").parse_args([])
+
+        self.assertEqual(args.attack, "rudimentary")
+        self.assertEqual(
+            args.defense_output_dir.name,
+            "aes_rudimentary_defense_seed42",
+        )
+        self.assertEqual(
+            args.selection_output_dir.name,
+            "aes_rudimentary_checkpoint_selection_seed42",
+        )
+
     def test_discovers_saved_training_checkpoints_in_step_order(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             output_dir = Path(temporary_directory)

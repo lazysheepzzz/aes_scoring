@@ -1,190 +1,116 @@
-# Rudimentary 攻击 — AES 鲁棒性评估计划
+# Rudimentary 主实验运行说明
 
-## 概述
+## 当前状态
 
-Rudimentary 是基于字符/词级随机编辑的攻击（拼写错误、词序乱、词重复等），属于规则型攻击，不需要梯度。参考论文实现，与 HotFlip 对齐形成完整攻防体系。
+Rudimentary 的正式攻击、D_RUDIMENTARY 在线对抗训练、checkpoint 选择和统一
+评估入口已经接通。当前实现保留论文原始的字符/词级随机编辑，只在 AES 专用层
+补充搜索、真实模型打分、预算、记录和训练逻辑。
 
-## 攻击参数（统一配置）
+论文原始源码保持不修改：
 
-| 参数 | 值 | 说明 |
-|------|-----|------|
-| `n_steps` | 30 | 最大迭代步数 |
-| `beam_size` | 1 | 贪心搜索 |
-| `n_candidates` | 16 | 每步候选数 |
-| `threshold` | 0.1 | 成功阈值（delta >= 0.1 才算攻击成功） |
+- `text_scoring_adv_training/evaluation/robustness_tests/common/rudimentary_edits.py`
 
-操作类型（参考论文）：
-- 字符级：随机替换、随机插入、随机删除、相邻交换
-- 词级：词重复、词删除、相邻词交换
+AES 专用新增逻辑：
 
-## 工作流程
+- `text_scoring_adv_training/evaluation/aes/attacks/rudimentary.py`
+- `text_scoring_adv_training/training/aes_trainer.py`
+- `whitebox/run_aes_rudimentary_adv_training.py`
+- `whitebox/select_aes_rudimentary_defense_checkpoint.py`
+- `whitebox/evaluate_aes_checkpoint.py`
 
-### Phase 1: Undefended ASR（1154 全量）
+## 正式攻击协议
 
-**目标**：获得 undefended baseline 的 Rudimentary ASR
+| 参数 | 值 |
+|---|---:|
+| 最大搜索步数 | 30 |
+| 每步候选数 | 16 |
+| beam size | 1 |
+| 成功阈值 | `score(perturbed) - score(original) >= 0.1` |
+| 编辑预算 | 最多接受 `floor(original_token_count * 0.1)` 次编辑，同时不超过 30 |
+| 随机种子 | 42 |
 
-- 测试集：`valid_fold0.csv`（1154 条）
-- Victim：`/root/autodl-tmp/victim/fold0_best`
-- 脚本：直接使用服务器已有代码 `run_rudimentary_full1134_thresh.py`，仅修改 `N_ESSAYS = 1134 → 1154`
-- 结果：`rudimentary_valid_1154_result.json`
+每一步都使用论文原始函数生成字符/词级候选，再用当前 victim 对完整候选文本
+做真实前向评分。只接受分数至少提高 `1e-6` 的最佳候选；victim tokenizer
+看来完全相同的候选会被过滤。输出包含 essay ID、原文、最终扰动文本、分数、
+delta、是否成功、band crossing 和逐步编辑记录。
 
-> **说明**：已有代码逻辑正确无需改动，只需把样本数从 1134 改为 1154 跑全量即可。
+## 旧结果是否可用
 
-**历史结果（1134条）**：ASR = 94.97%
+`rudimentary_unified_thresh_result.json` 的历史记录是 1154 篇、ASR 94.45%
+（1090/1154）、mean delta 0.1156，可用作 B0 的 sanity check。
 
-### Phase 2: 对抗训练
+它不能直接进入正式主表，因为缺少固定 seed、10% 编辑预算、essay ID、原文/
+扰动文本和运行清单。`rudimentary_0.1.md` 中另有 1134 篇的旧口径记录，也只
+保留作历史追溯。
 
-**目标**：训练抵御 Rudimentary 攻击的模型
+## D_RUDIMENTARY 训练设计
 
-- 参考论文原版对抗训练方案（与 HotFlip v4 对齐）
-- 训练脚本：`run_rudimentary_adv_v4.py`（需新建，参考 HotFlip v4 训练框架）
-- 对抗训练数据生成：`generate_rudimentary_train_adv_data.py`（需新建）
-- 配置参数：weight=2.0, margin=0.1, epochs=5（与 HotFlip v4 对齐）
-- 输出：`/root/autodl-tmp/rudimentary_adv_v4/`
+D_RUDIMENTARY 与 C0、D_HOTFLIP 都从同一个 B0 初始化，共享 epochs、batch、
+gradient accumulation、学习率、AdamW、warmup、bf16、seed、评估和保存频率。
+唯一实质差异是训练时的攻击。
 
-> **说明**：对抗训练框架复用 `aes_trainer.py`，将 HotFlip 攻击替换为 Rudimentary 攻击。训练逻辑与 HotFlip v4 完全一致，仅攻击方式不同。
+每个 micro-batch 随机选择 50% 样本；每个样本用论文原始编辑生成 16 个
+one-step 候选，当前模型真实评分后选择最高且确实增分的候选。损失为 clean
+MSE 加权单边分数膨胀损失，weight=1.0、tolerance=0.05，与 D_HOTFLIP 对齐。
 
-### Phase 3: Defended ASR（1154 全量）
+## 训练机 C 的主实验顺序
 
-**目标**：评估对抗训练后的 Rudimentary ASR
+以下命令在 `E:\xjj\aes_scoring` 的 PowerShell、`xjj_aes` 环境运行。
 
-- 脚本：`eval_rudimentary_defended.py`（需新建，参考 `eval_defended.py`）
-- 结果：`rudimentary_defended_result.json`
+### 1. dry-run
 
-## 预期结果对比
-
-| 模型 | QWK | Rudimentary ASR | avg_steps |
-|------|-----|-----------------|-----------|
-| undefended baseline | ~0.854 | ? | ? |
-| **rudimentary defended** | **?** | **?** | **?** |
-
-目标：ASR 显著下降，QWK 不崩溃。
-
----
-
-## 文件清单（rudimentary/ 目录）
-
-### 需新建的脚本（Phase 2-3）
-
-| 文件 | 作用 |
-|------|------|
-| `generate_rudimentary_train_adv_data.py` | 生成 Rudimentary 对抗训练数据 |
-| `run_rudimentary_adv_v4.py` | Rudimentary 对抗训练启动脚本 |
-| `eval_rudimentary_defended.py` | 对 defended 模型跑 Rudimentary ASR |
-
-### 已有文件（服务器，已有代码逻辑正确）
-
-| 文件 | 状态 | 说明 |
-|------|------|------|
-| `run_rudimentary_full1134_thresh.py` | 直接使用，仅改 N_ESSAYS=1154 | 攻击代码逻辑正确无需改动 |
-| `rudimentary_unified_thresh_result.json` | 已有 1134 条结果 | ASR=94.97% |
-
-### 结果 JSON（跑完后）
-
-| 文件 | 内容 |
-|------|------|
-| `rudimentary_valid_1154_result.json` | undefended Rudimentary ASR |
-| `rudimentary_valid_1154_progress.json` | 进度记录 |
-| `rudimentary_defended_result.json` | defended Rudimentary ASR |
-| `rudimentary_defended_progress.json` | 进度记录 |
-
----
-
-## 服务器环境
-
-| 项目 | 值 |
-|------|-----|
-| 主机 | `ssh aes-gpu` → connect.nmb1.seetacloud.com:47837 |
-| GPU | RTX 4090 24GB |
-| Conda 环境 | aes |
-| 代码路径 | `/root/autodl-tmp/robust_text_scoring/` |
-| 数据路径 | `/root/autodl-tmp/data/valid_fold0.csv`（1154 条） |
-
----
-
-## 使用方法
-
-### Phase 1: 跑 undefended ASR
-
-```bash
-# 直接修改服务器已有脚本的 N_ESSAYS，然后运行
-cd /root/autodl-tmp/robust_text_scoring
-# 修改 run_rudimentary_full1134_thresh.py 中 N_ESSAYS=1134 → 1154
-conda run --no-capture-output -n aes python rudimentary/run_rudimentary_full1134_thresh.py
-# 结果输出到 /root/autodl-tmp/aes_final_run/rudimentary_valid_1154_result.json
+```powershell
+python .\whitebox\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42 --dry-run
 ```
 
-### Phase 2: 对抗训练
+确认 `training_mode` 为 `rudimentary_defense`，`use_rudimentary_edits` 为
+`true`，checkpoint 和 CSV 都指向当前仓库中的正确路径。
 
-```bash
-cd /root/autodl-tmp/robust_text_scoring
-python rudimentary/run_rudimentary_adv_v4.py
+### 2. 训练 D_RUDIMENTARY
+
+```powershell
+python .\whitebox\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42
 ```
 
-### Phase 3: 跑 defended ASR
+不要与其他训练或攻击在同一张 RTX 3090 上并行运行。
 
-```bash
-cd /root/autodl-tmp/robust_text_scoring
-conda run --no-capture-output -n aes python whitebox/rudimentary/eval_rudimentary_defended.py
+### 3. 选择 checkpoint
+
+```powershell
+python .\whitebox\select_aes_rudimentary_defense_checkpoint.py
 ```
 
----
+选择器复用固定的 256 篇 `prompt_name + score` 分层子集。先要求完整 clean
+QWK 不低于 `C0 QWK - 0.02`，再以 10-step Rudimentary subset ASR 最低为
+主要标准。结果写入：
 
-## 注意事项
-
-1. **Rudimentary 攻击不需要梯度**：与 HotFlip 不同，Rudimentary 是纯规则型攻击，不需要模型梯度信息
-2. **对抗训练可复用 HotFlip v4 框架**：只需将 `hotflip_pointwise` 替换为 `RudimentaryAttack`
-3. **对齐 HotFlip 实验设计**：保证训练数据、参数一致，便于对比
-
----
-
-## 关键代码参考
-
-### RudimentaryAttack 类（已有）
-
-- 路径：`text_scoring_adv_training/evaluation/aes/attacks/rudimentary.py`
-- 接口：`RudimentaryAttack(scorer, n_steps=30, n_candidates=16, threshold=0.1)`
-- 方法：`attack(text) -> perturbed_text or None`
-
-### 对抗训练改造要点
-
-在 `aes_trainer.py` 中，将 HotFlip 替换为 Rudimentary：
-
-```python
-# 原来（HotFlip）
-from text_scoring_adv_training.evaluation.robustness_tests.common.hotflip import hotflip_pointwise
-
-# 改为（Rudimentary）
-from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import RudimentaryAttack
-
-# train_step 中生成对抗文本
-atk = RudimentaryAttack(scorer, n_steps=30, n_candidates=16, threshold=0.1)
-perturbed = atk.attack(text)  # 返回扰动后的文本
+```text
+outputs\aes_rudimentary_checkpoint_selection_seed42\best_checkpoint.json
 ```
 
-### 训练配置 JSON（rudimentary_v4_config.json）
+### 4. 正式评估
 
-```json
-{
-  "checkpoint_path": "/root/autodl-tmp/victim/fold0_best",
-  "train_csv": "/root/autodl-tmp/data/train_fold0.csv",
-  "valid_csv": "/root/autodl-tmp/data/valid_fold0.csv",
-  "output_dir": "/root/autodl-tmp/rudimentary_adv_v4",
-  "num_epochs": 5,
-  "per_device_train_batch_size": 4,
-  "gradient_accumulation_steps": 8,
-  "learning_rate": 2e-5,
-  "max_length": 1024,
-  "seed": 42,
-  "eval_every": 200,
-  "save_every": 1000,
-  "use_rudimentary_swaps": true,
-  "rudimentary_weight": 2.0,
-  "rudimentary_n_candidates": 16,
-  "rudimentary_n_steps": 30,
-  "rudimentary_threshold": 0.1,
-  "rudimentary_margin": 0.1
-}
+```powershell
+$hotflipSelected = (Get-Content .\outputs\aes_hotflip_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
+$rudimentarySelected = (Get-Content .\outputs\aes_rudimentary_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
+
+python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint .\deberta_checkpoints\fold0_best --out .\outputs\eval_rudimentary_b0_seed42 --seed 42
+python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint .\outputs\aes_clean_continuation_seed42\best --out .\outputs\eval_rudimentary_c0_seed42 --seed 42
+python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint $hotflipSelected --out .\outputs\eval_rudimentary_hotflip_defense_seed42 --seed 42
+python .\whitebox\evaluate_aes_checkpoint.py --attack rudimentary --checkpoint $rudimentarySelected --out .\outputs\eval_rudimentary_defense_seed42 --seed 42
 ```
 
-> 注意：`aes_trainer.py` 目前只有 `use_hotflip_swaps`，需要新增 `use_rudimentary_swaps` 选项，复用同一套训练框架。
+四个目录都会生成 `clean_qwk.json`、`asr_summary.json`、
+`rudimentary_details.json` 和 `run_manifest.json`，运行时默认显示进度条和
+ETA。
+
+## 主表应报告
+
+至少报告 B0、C0、D_HOTFLIP 和 D_RUDIMENTARY 的：
+
+- clean QWK、MAE；
+- Rudimentary ASR@0.10；
+- mean delta；
+- upward band ASR。
+
+seed 42 完成并确认流程无误后，再补 seed 43/44；这不阻塞当前主实验。

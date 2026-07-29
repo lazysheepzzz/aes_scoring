@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the v4 defended model on clean essays and HotFlip attacks."""
+"""Evaluate an AES checkpoint on clean essays and a supported attack."""
 
 from __future__ import annotations
 
@@ -54,7 +54,13 @@ def _configure_environment(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate clean QWK/MAE and HotFlip ASR for the v4 model."
+        description="Evaluate clean QWK/MAE and adversarial ASR for an AES checkpoint."
+    )
+    parser.add_argument(
+        "--attack",
+        choices=("hotflip", "rudimentary"),
+        default="hotflip",
+        help="Attack evaluated after clean metrics (default: hotflip).",
     )
     parser.add_argument(
         "--checkpoint",
@@ -283,7 +289,7 @@ def _attack_command(args: argparse.Namespace) -> list[str]:
         "--data",
         str(args.valid),
         "--attack",
-        "hotflip",
+        args.attack,
         "--n-essays",
         str(args.n_essays),
         "--out",
@@ -360,13 +366,13 @@ def main() -> int:
                 "max_candidates_per_step": args.max_candidates_per_step,
                 "max_token_edit_rate": args.max_token_edit_rate,
                 "clean": not args.skip_clean,
-                "hotflip": not args.skip_attack,
+                "attack": None if args.skip_attack else args.attack,
             },
             indent=2,
             ensure_ascii=False,
         )
     )
-    print(f"[RUN] HotFlip command: {_format_command(_attack_command(args))}")
+    print(f"[RUN] {args.attack} command: {_format_command(_attack_command(args))}")
     if args.dry_run:
         return 0
 
@@ -398,7 +404,10 @@ def main() -> int:
     if args.skip_attack:
         return 0
 
-    print("=== Step 2: HotFlip ASR on validation set ===", flush=True)
+    print(
+        f"=== Step 2: {args.attack} ASR on validation set ===",
+        flush=True,
+    )
     completed = subprocess.run(
         _attack_command(args),
         env=os.environ.copy(),

@@ -28,7 +28,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.evaluation.aes.evaluate import evaluate_attack, print_summary, AttackResult
-from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import RudimentaryAttack
+from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import (
+    IterativeRudimentaryAttack,
+)
 from text_scoring_adv_training.evaluation.aes.attacks.injection import InjectionAttack
 from text_scoring_adv_training.evaluation.aes.attacks.hotflip import HotFlipAttack
 from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import MLMGuidedAttack
@@ -103,7 +105,15 @@ def build_attack(
 ):
     """Instantiate an attack using the unified AES evaluation protocol."""
     if attack_name == "rudimentary":
-        return RudimentaryAttack(n_variants=1)
+        return IterativeRudimentaryAttack(
+            scorer,
+            n_steps=n_steps,
+            beam_size=beam_size,
+            candidates_per_step=max_candidates_per_step,
+            batch_size=32,
+            threshold=success_threshold,
+            max_token_edit_rate=max_token_edit_rate,
+        )
     elif attack_name == "injection":
         return InjectionAttack(mode="injection", position="random", n_variants=1)
     elif attack_name == "hotflip":
@@ -216,6 +226,39 @@ def run(args):
             json.dump(detail, f, indent=2, ensure_ascii=False)
         print(f"  Detail saved to {out_file}")
 
+    shared_attack_parameters = {
+        "n_steps": args.n_steps,
+        "beam_size": args.beam_size,
+        "max_candidates_per_step": args.max_candidates_per_step,
+        "max_token_edit_rate": args.max_token_edit_rate,
+    }
+    attack_parameters = {
+        "rudimentary": {
+            **shared_attack_parameters,
+            "success_threshold": args.success_threshold,
+            "improvement_tolerance": 1e-6,
+            "edit_budget_definition": (
+                "accepted edit operations <= floor(original victim-token count "
+                "* max_token_edit_rate), additionally capped by n_steps"
+            ),
+            "token_equivalent_candidates_filtered": True,
+            "operations": [
+                "character_substitution",
+                "character_insertion",
+                "character_deletion",
+                "adjacent_character_swap",
+                "word_repetition",
+                "word_deletion",
+                "adjacent_word_swap",
+            ],
+        },
+        "hotflip": {
+            **shared_attack_parameters,
+            "n_sample_pos": args.n_sample_pos,
+            "top_k_per_pos": args.top_k_per_pos,
+            "success_threshold": args.success_threshold,
+        },
+    }
     manifest = {
         "victim": str(args.victim),
         "data": str(args.data),
@@ -223,14 +266,10 @@ def run(args):
         "n_essays": len(essays),
         "seed": args.seed,
         "success_threshold": args.success_threshold,
-        "hotflip": {
-            "n_steps": args.n_steps,
-            "beam_size": args.beam_size,
-            "n_sample_pos": args.n_sample_pos,
-            "top_k_per_pos": args.top_k_per_pos,
-            "max_candidates_per_step": args.max_candidates_per_step,
-            "max_token_edit_rate": args.max_token_edit_rate,
-        },
+        "attack_parameters": attack_parameters.get(
+            args.attack,
+            shared_attack_parameters,
+        ),
     }
     with open(out_dir / "run_manifest.json", "w", encoding="utf-8") as file:
         json.dump(manifest, file, indent=2, ensure_ascii=False)
