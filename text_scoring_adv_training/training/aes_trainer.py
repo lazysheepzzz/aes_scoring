@@ -21,6 +21,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
+from tqdm.auto import tqdm
 from transformers import PreTrainedTokenizer
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -59,6 +60,7 @@ class AESAdversarialConfig:
     adam_beta2: float = 0.999
     adam_epsilon: float = 1e-8
     clean_loss_weight: float = 1.0
+    show_progress: bool = True
     use_hotflip_swaps: bool = True
     hotflip_weight: float = 1.0
     hotflip_n_sample_pos: int = 8
@@ -410,7 +412,13 @@ class AESAdversarialTrainer:
                            batch_size=self.config.per_device_train_batch_size * 4,
                            shuffle=False, collate_fn=self.collator)
         preds, labels_list = [], []
-        for batch in loader:
+        for batch in tqdm(
+            loader,
+            desc="Validation",
+            unit="batch",
+            dynamic_ncols=True,
+            disable=True if not self.config.show_progress else None,
+        ):
             b = {k: v.to(self.device) for k, v in batch.items()}
             with self._autocast_context():
                 logits = self.scorer.model(
@@ -535,7 +543,14 @@ class AESAdversarialTrainer:
             self.scorer.model.train()
             epoch_loss, epoch_steps = 0.0, 0
 
-            for batch in train_loader:
+            train_progress = tqdm(
+                train_loader,
+                desc=f"Epoch {epoch + 1}/{cfg.num_epochs}",
+                unit="batch",
+                dynamic_ncols=True,
+                disable=True if not cfg.show_progress else None,
+            )
+            for batch in train_progress:
                 metrics = self.train_step(batch)
                 epoch_loss += metrics["total_loss"]
                 epoch_steps += 1
@@ -550,10 +565,13 @@ class AESAdversarialTrainer:
 
                 if epoch_steps % 20 == 0:
                     lr = self.scheduler.get_last_lr()[0]
-                    print(f"[epoch={epoch+1} step={epoch_steps} gstep={global_step}] "
-                          f"loss={metrics['total_loss']:.4f} "
-                          f"(base={metrics['base_loss']:.4f} hf={metrics['hotflip_loss']:.4f}) "
-                          f"lr={lr:.2e}", flush=True)
+                    train_progress.set_postfix(
+                        gstep=global_step,
+                        loss=f"{metrics['total_loss']:.4f}",
+                        base=f"{metrics['base_loss']:.4f}",
+                        hotflip=f"{metrics['hotflip_loss']:.4f}",
+                        lr=f"{lr:.2e}",
+                    )
 
                 if did_optimizer_step and global_step % cfg.eval_every == 0:
                     eval_metrics = self.evaluate()

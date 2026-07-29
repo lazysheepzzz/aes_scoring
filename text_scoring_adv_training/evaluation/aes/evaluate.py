@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+from tqdm.auto import tqdm
 
 __all__ = ["evaluate_attack", "AttackResult", "print_summary"]
 
@@ -140,6 +141,7 @@ def evaluate_attack(
     thresholds: Optional[List[float]] = None,
     batch_size: int = 32,
     success_threshold: float = 0.1,
+    show_progress: bool = True,
 ) -> AttackResult:
     """
     Evaluate a single attack on a list of essays.
@@ -158,6 +160,13 @@ def evaluate_attack(
     if success_threshold < 0:
         raise ValueError("success_threshold must be non-negative")
     result = AttackResult(attack_name, success_threshold=success_threshold)
+    progress = tqdm(
+        total=len(essays),
+        desc=f"{attack_name} attack",
+        unit="essay",
+        dynamic_ncols=True,
+        disable=True if not show_progress else None,
+    )
 
     for i in range(0, len(essays), batch_size):
         batch = essays[i : i + batch_size]
@@ -198,6 +207,7 @@ def evaluate_attack(
                 histories = [[] for _ in variants]
             all_perturbed.append(variants)
             all_histories.append(histories)
+            progress.update(1)
 
         # Score perturbations
         pert_scores: List[List[float]] = []
@@ -228,6 +238,7 @@ def evaluate_attack(
                 histories=histories,
             )
 
+    progress.close()
     return result
 
 

@@ -150,6 +150,11 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--adam-beta2", type=float, default=0.999)
     parser.add_argument("--adam-epsilon", type=float, default=1e-8)
     parser.add_argument("--clean-loss-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable interactive training and validation progress bars.",
+    )
 
     # Kept in both configs; ignored by C0 because use_hotflip_swaps is false.
     parser.add_argument("--hotflip-weight", type=float, default=1.0)
@@ -215,6 +220,7 @@ def build_config(
         "adam_beta2": args.adam_beta2,
         "adam_epsilon": args.adam_epsilon,
         "clean_loss_weight": args.clean_loss_weight,
+        "show_progress": not args.no_progress,
         "use_hotflip_swaps": training_mode == HOTFLIP_DEFENSE,
         "hotflip_weight": args.hotflip_weight,
         "hotflip_n_sample_pos": args.hotflip_n_sample_pos,
@@ -309,4 +315,3 @@ def main(training_mode: str) -> int:
             f"Best checkpoint: {args.output_dir / 'best'}"
         )
     return completed.returncode
-

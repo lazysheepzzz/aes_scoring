@@ -313,7 +313,7 @@ def _base_evaluation_command(
     out_dir: Path,
     args: argparse.Namespace,
 ) -> list[str]:
-    return [
+    command = [
         sys.executable,
         str(EVALUATION_ENTRYPOINT),
         "--checkpoint",
@@ -332,6 +332,9 @@ def _base_evaluation_command(
         str(args.seed),
         "--current-python",
     ]
+    if args.no_progress:
+        command.append("--no-progress")
+    return command
 
 
 def _evaluate_clean_if_needed(
@@ -471,6 +474,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Recompute results that already exist in the selection directory.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable progress bars in clean and subset evaluations.",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser

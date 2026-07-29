@@ -115,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-clean", action="store_true")
     parser.add_argument("--skip-attack", action="store_true")
     parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable interactive progress bars.",
+    )
+    parser.add_argument(
         "--online",
         action="store_true",
         help="Allow Hugging Face network access. Offline mode is the default.",
@@ -188,7 +193,15 @@ def _evaluate_clean(args: argparse.Namespace) -> dict[str, float | int]:
     predictions: list[float] = []
     labels: list[float] = []
     with torch.inference_mode():
-        for batch in loader:
+        from tqdm.auto import tqdm
+
+        for batch in tqdm(
+            loader,
+            desc="Clean evaluation",
+            unit="batch",
+            dynamic_ncols=True,
+            disable=True if args.no_progress else None,
+        ):
             input_ids = batch["input_ids"].to(args.device)
             attention_mask = batch["attention_mask"].to(args.device)
             logits = scorer.model(
@@ -300,6 +313,8 @@ def _attack_command(args: argparse.Namespace) -> list[str]:
     ]
     if args.thresholds is not None:
         command.extend(["--thresholds", str(args.thresholds)])
+    if args.no_progress:
+        command.append("--no-progress")
     return command
 
 

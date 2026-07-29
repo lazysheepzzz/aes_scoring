@@ -114,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
     parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable interactive progress bars.",
+    )
+    parser.add_argument(
         "--hf-home",
         type=Path,
         default=_default_path(
@@ -201,6 +206,8 @@ def build_command(args: argparse.Namespace) -> list[str]:
     ]
     if args.thresholds is not None:
         command.extend(["--thresholds", str(args.thresholds)])
+    if args.no_progress:
+        command.append("--no-progress")
     return command
 
 

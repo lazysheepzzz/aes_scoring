@@ -197,6 +197,7 @@ def run(args):
             thresholds=thresholds,
             batch_size=args.batch_size,
             success_threshold=args.success_threshold,
+            show_progress=not args.no_progress,
         )
         results.append(result)
 
@@ -273,6 +274,11 @@ def main():
     parser.add_argument("--top-k-per-pos", type=int, default=2)
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable interactive progress bars.",
+    )
     args = parser.parse_args()
 
     positive_fields = (
