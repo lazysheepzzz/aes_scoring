@@ -29,6 +29,7 @@ from whitebox.select_aes_hotflip_defense_checkpoint import (
     create_or_load_debug_subset,
     discover_checkpoint_candidates,
     select_best_checkpoint,
+    stratified_sample_indices,
 )
 
 
@@ -238,6 +239,35 @@ class AESCheckpointSelectionTest(unittest.TestCase):
                 subset.groupby(["prompt_name", "score"]).size().tolist(),
                 [5, 5, 5, 5],
             )
+
+    def test_stratified_subset_keeps_singleton_strata(self):
+        dataframe = pd.DataFrame(
+            [
+                {
+                    "essay_id": "rare",
+                    "prompt_name": "The Face on Mars",
+                    "score": 6,
+                },
+                *[
+                    {
+                        "essay_id": f"common-{index}",
+                        "prompt_name": "Common prompt",
+                        "score": 3,
+                    }
+                    for index in range(19)
+                ],
+            ]
+        )
+
+        selected_indices = stratified_sample_indices(
+            dataframe,
+            stratify_columns=["prompt_name", "score"],
+            sample_size=10,
+            seed=42,
+        )
+
+        self.assertEqual(len(selected_indices), 10)
+        self.assertIn(0, selected_indices)
 
 
 @unittest.skipUnless(

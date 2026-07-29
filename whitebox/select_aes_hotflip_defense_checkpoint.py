@@ -90,6 +90,89 @@ def deduplicate_checkpoints(
     return unique, duplicates
 
 
+def stratified_sample_indices(
+    dataframe,
+    *,
+    stratify_columns: list[str],
+    sample_size: int,
+    seed: int,
+) -> list[int]:
+    """Sample exact-size strata without sklearn's two-members restriction.
+
+    When the sample can cover every stratum, one row is reserved for each
+    stratum (including singleton strata). Remaining slots are allocated
+    proportionally to each stratum's remaining capacity using largest
+    remainders. Rows are then sampled deterministically within each stratum.
+    """
+    import numpy as np
+
+    grouped_indices: dict[tuple[str, ...], list[int]] = {}
+    for index, row in dataframe.iterrows():
+        key = tuple(str(row[column]) for column in stratify_columns)
+        grouped_indices.setdefault(key, []).append(int(index))
+
+    groups = sorted(grouped_indices.items(), key=lambda item: item[0])
+    if not groups:
+        raise ValueError("Cannot stratify an empty dataframe")
+    if not 0 < sample_size <= len(dataframe):
+        raise ValueError(
+            f"sample_size must be in [1, {len(dataframe)}], got {sample_size}"
+        )
+
+    cover_every_stratum = sample_size >= len(groups)
+    allocations = [1 if cover_every_stratum else 0 for _ in groups]
+    remaining_slots = sample_size - sum(allocations)
+    capacities = [
+        len(indices) - allocation
+        for allocation, (_, indices) in zip(allocations, groups)
+    ]
+
+    while remaining_slots > 0:
+        total_capacity = sum(capacities)
+        if total_capacity <= 0:
+            raise RuntimeError("Stratified allocation ran out of capacity")
+        quotas = [
+            remaining_slots * capacity / total_capacity
+            for capacity in capacities
+        ]
+        floor_additions = [
+            min(capacity, int(quota))
+            for capacity, quota in zip(capacities, quotas)
+        ]
+        added = sum(floor_additions)
+        for index, addition in enumerate(floor_additions):
+            allocations[index] += addition
+            capacities[index] -= addition
+        remaining_slots -= added
+        if remaining_slots == 0:
+            break
+
+        ranked = sorted(
+            range(len(groups)),
+            key=lambda index: (
+                -(quotas[index] - int(quotas[index])),
+                groups[index][0],
+            ),
+        )
+        for index in ranked:
+            if remaining_slots == 0:
+                break
+            if capacities[index] <= 0:
+                continue
+            allocations[index] += 1
+            capacities[index] -= 1
+            remaining_slots -= 1
+
+    generator = np.random.default_rng(seed)
+    selected: list[int] = []
+    for allocation, (_, indices) in zip(allocations, groups):
+        if allocation == 0:
+            continue
+        choices = generator.choice(indices, size=allocation, replace=False)
+        selected.extend(int(value) for value in choices)
+    return sorted(selected)
+
+
 def create_or_load_debug_subset(
     valid_csv: Path,
     subset_ids_path: Path,
@@ -100,7 +183,6 @@ def create_or_load_debug_subset(
 ) -> dict[str, Any]:
     """Create or reuse the fixed prompt+score stratified debugging subset."""
     import pandas as pd
-    from sklearn.model_selection import train_test_split
 
     dataframe = pd.read_csv(valid_csv)
     required = {"essay_id", "prompt_name", "score"}
@@ -147,19 +229,12 @@ def create_or_load_debug_subset(
             }
         )
     else:
-        strata = (
-            dataframe["prompt_name"].astype(str)
-            + "\u241f"
-            + dataframe["score"].astype(str)
+        selected_indices = stratified_sample_indices(
+            dataframe,
+            stratify_columns=["prompt_name", "score"],
+            sample_size=subset_size,
+            seed=seed,
         )
-        selected_indices, _ = train_test_split(
-            dataframe.index.to_numpy(),
-            train_size=subset_size,
-            random_state=seed,
-            shuffle=True,
-            stratify=strata,
-        )
-        selected_indices = sorted(int(value) for value in selected_indices)
         subset = dataframe.loc[selected_indices].reset_index(drop=True)
         essay_ids = subset["essay_id"].tolist()
         metadata = {
