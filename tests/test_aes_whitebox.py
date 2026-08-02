@@ -255,6 +255,24 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         self.assertIsNone(clean.grad)
         self.assertGreater(float(adversarial.grad.item()), 0.0)
 
+    def test_linear_relative_loss_preserves_small_rudimentary_signal(self):
+        clean = torch.tensor([1.0], requires_grad=True)
+        adversarial = torch.tensor([1.003], requires_grad=True)
+        target = torch.tensor([2.0])
+
+        loss = one_sided_score_inflation_loss(
+            clean,
+            adversarial,
+            target,
+            tolerance=0.0,
+            relative_loss_power=1.0,
+        )
+        loss.backward()
+
+        self.assertAlmostEqual(float(loss.item()), 0.0015, places=6)
+        self.assertIsNone(clean.grad)
+        self.assertAlmostEqual(float(adversarial.grad.item()), 0.5)
+
     def test_legacy_margin_config_maps_to_tolerance(self):
         config = AESAdversarialConfig(hotflip_margin=0.1)
         self.assertEqual(config.hotflip_tolerance, 0.1)
@@ -297,6 +315,15 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         self.assertFalse(rudimentary_config["use_hotflip_swaps"])
         self.assertTrue(rudimentary_config["use_rudimentary_edits"])
         self.assertEqual(clean_config["precision"], "bfloat16")
+        self.assertEqual(rudimentary_config["rudimentary_tolerance"], 0.0)
+        self.assertEqual(
+            rudimentary_config["rudimentary_relative_loss_power"],
+            1.0,
+        )
+        self.assertEqual(
+            rudimentary_config["rudimentary_edits_per_candidate"],
+            3,
+        )
 
     def test_rudimentary_training_selects_true_best_effective_edit(self):
         class _TrainingTokenizer:
@@ -340,12 +367,72 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
                 "original",
                 scorer,
                 max_candidates=2,
+                edits_per_candidate=1,
                 max_length=1024,
                 device="cpu",
             )
 
         self.assertEqual(selected, "stronger")
         self.assertTrue(scorer.model.training)
+
+    def test_rudimentary_v2_composes_three_original_edits(self):
+        class _TrainingTokenizer:
+            token_ids = {
+                "original": [1, 1],
+                "a1": [1, 2],
+                "a2": [1, 3],
+                "a3": [1, 8],
+                "b1": [1, 4],
+                "b2": [1, 5],
+                "b3": [1, 6],
+            }
+
+            def __call__(self, texts, return_tensors=None, **_kwargs):
+                if isinstance(texts, str):
+                    return {"input_ids": list(self.token_ids[texts])}
+                rows = [self.token_ids[text] for text in texts]
+                return {
+                    "input_ids": torch.tensor(rows, dtype=torch.long),
+                    "attention_mask": torch.ones(
+                        (len(rows), len(rows[0])),
+                        dtype=torch.long,
+                    ),
+                }
+
+        class _ScoreModel(torch.nn.Module):
+            def forward(self, input_ids, attention_mask):
+                del attention_mask
+                return SimpleNamespace(
+                    logits=input_ids.float().sum(dim=1, keepdim=True)
+                )
+
+        chains = {
+            "original": ["a1", "b1"],
+            "a1": ["a2"],
+            "a2": ["a3"],
+            "b1": ["b2"],
+            "b2": ["b3"],
+        }
+        scorer = SimpleNamespace(
+            tokenizer=_TrainingTokenizer(),
+            model=_ScoreModel(),
+        )
+
+        with patch(
+            "text_scoring_adv_training.training.aes_trainer."
+            "sample_variants",
+            side_effect=lambda text, _count: chains.get(text, []),
+        ):
+            selected = run_rudimentary_one_row(
+                "original",
+                scorer,
+                max_candidates=2,
+                edits_per_candidate=3,
+                max_length=1024,
+                device="cpu",
+            )
+
+        self.assertEqual(selected, "a3")
 
     def test_adamw_excludes_bias_and_normalization_vectors_from_decay(self):
         model = torch.nn.Sequential(
@@ -385,12 +472,13 @@ class AESCheckpointSelectionTest(unittest.TestCase):
         self.assertEqual(args.attack, "rudimentary")
         self.assertEqual(
             args.defense_output_dir.name,
-            "aes_rudimentary_defense_seed42",
+            "aes_rudimentary_defense_v2_seed42",
         )
         self.assertEqual(
             args.selection_output_dir.name,
-            "aes_rudimentary_checkpoint_selection_seed42",
+            "aes_rudimentary_defense_v2_checkpoint_selection_seed42",
         )
+        self.assertEqual(args.selection_steps, 30)
 
     def test_discovers_saved_training_checkpoints_in_step_order(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -53,15 +53,30 @@ delta、是否成功、band crossing 和逐步编辑记录。
 扰动文本和运行清单。`rudimentary_0.1.md` 中另有 1134 篇的旧口径记录，也只
 保留作历史追溯。
 
-## D_RUDIMENTARY 训练设计
+## seed 42 正式结果与 v1 结论
+
+| 模型 | Clean QWK | Rudimentary ASR | Mean delta | Upward band ASR |
+|---|---:|---:|---:|---:|
+| B0 | 0.8377 | 0.9419 | 0.1164 | 0.1075 |
+| C0 | 0.8350 | 0.9965 | 0.1249 | 0.1066 |
+| D_HOTFLIP | 0.8216 | 0.9896 | 0.1182 | 0.1265 |
+| D_RUDIMENTARY-v1 | 0.8396 | 0.9411 | 0.1152 | 0.1075 |
+
+v1 相对 C0 的 ASR 只下降 5.54 个百分点，未达到 15 个百分点门槛；相对
+B0 只下降 0.08 个百分点。v1 保留为训练强度消融，不作为成功防御结论。
+
+## D_RUDIMENTARY-v2 训练设计
 
 D_RUDIMENTARY 与 C0、D_HOTFLIP 都从同一个 B0 初始化，共享 epochs、batch、
 gradient accumulation、学习率、AdamW、warmup、bf16、seed、评估和保存频率。
-唯一实质差异是训练时的攻击。
+优化设置保持一致，攻击专用目标按 v1 结果修正。
 
 每个 micro-batch 随机选择 50% 样本；每个样本用论文原始编辑生成 16 个
-one-step 候选，当前模型真实评分后选择最高且确实增分的候选。损失为 clean
-MSE 加权单边分数膨胀损失，weight=1.0、tolerance=0.05，与 D_HOTFLIP 对齐。
+候选。v2 的每个候选连续执行 3 次原始编辑，再由当前模型真实评分并选择最高且
+确实增分的候选。模型前向候选数仍为16，因此相对 v1 基本不增加 GPU 候选评分
+开销。损失为 clean MSE 加权单边分数膨胀损失，weight=1.0；Rudimentary
+相对增分 tolerance 从0.05改为0.0，并将相对虚高项从平方惩罚改为线性单边
+惩罚，避免小增分在平方后缩小到近乎零。HotFlip 的既有平方损失不变。
 
 ## 训练机 C 的主实验顺序
 
@@ -70,16 +85,18 @@ MSE 加权单边分数膨胀损失，weight=1.0、tolerance=0.05，与 D_HOTFLIP
 ### 1. dry-run
 
 ```powershell
-python .\rudimentary\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42 --dry-run
+python .\rudimentary\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_v2_seed42 --dry-run
 ```
 
 确认 `training_mode` 为 `rudimentary_defense`，`use_rudimentary_edits` 为
-`true`，checkpoint 和 CSV 都指向当前仓库中的正确路径。
+`true`，`rudimentary_edits_per_candidate` 为3，`rudimentary_tolerance` 为0，
+`rudimentary_relative_loss_power` 为1，checkpoint 和 CSV 都指向当前仓库中的
+正确路径。
 
-### 2. 训练 D_RUDIMENTARY
+### 2. 训练 D_RUDIMENTARY-v2
 
 ```powershell
-python .\rudimentary\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_seed42
+python .\rudimentary\run_aes_rudimentary_adv_training.py --seed 42 --output-dir .\outputs\aes_rudimentary_defense_v2_seed42
 ```
 
 不要与其他训练或攻击在同一张 RTX 3090 上并行运行。
@@ -91,28 +108,24 @@ python .\rudimentary\select_aes_rudimentary_defense_checkpoint.py
 ```
 
 选择器复用固定的 256 篇 `prompt_name + score` 分层子集。先要求完整 clean
-QWK 不低于 `C0 QWK - 0.02`，再以 10-step Rudimentary subset ASR 最低为
+QWK 不低于 `C0 QWK - 0.02`，再以30-step Rudimentary subset ASR最低为
 主要标准。结果写入：
 
 ```text
-outputs\aes_rudimentary_checkpoint_selection_seed42\best_checkpoint.json
+outputs\aes_rudimentary_defense_v2_checkpoint_selection_seed42\best_checkpoint.json
 ```
 
 ### 4. 正式评估
 
 ```powershell
-$hotflipSelected = (Get-Content .\outputs\aes_hotflip_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
-$rudimentarySelected = (Get-Content .\outputs\aes_rudimentary_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
+$rudimentaryV2Selected = (Get-Content .\outputs\aes_rudimentary_defense_v2_checkpoint_selection_seed42\best_checkpoint.json -Raw | ConvertFrom-Json).checkpoint_path
 
-python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint .\deberta_checkpoints\fold0_best --out .\outputs\eval_rudimentary_b0_seed42 --seed 42
-python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint .\outputs\aes_clean_continuation_seed42\best --out .\outputs\eval_rudimentary_c0_seed42 --seed 42
-python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint $hotflipSelected --out .\outputs\eval_rudimentary_hotflip_defense_seed42 --seed 42
-python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint $rudimentarySelected --out .\outputs\eval_rudimentary_defense_seed42 --seed 42
+python .\rudimentary\evaluate_aes_rudimentary.py --checkpoint $rudimentaryV2Selected --out .\outputs\eval_rudimentary_defense_v2_seed42 --seed 42
 ```
 
-四个目录都会生成 `clean_qwk.json`、`asr_summary.json`、
-`rudimentary_details.json` 和 `run_manifest.json`，运行时默认显示进度条和
-ETA。
+已有 B0、C0、D_HOTFLIP 和 v1 结果无需重跑。v2 评估目录会生成
+`clean_qwk.json`、`asr_summary.json`、`rudimentary_details.json` 和
+`run_manifest.json`，运行时默认显示进度条和 ETA。
 
 ## 主表应报告
 

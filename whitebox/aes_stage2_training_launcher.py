@@ -93,8 +93,8 @@ def _default_output_dir(training_mode: str) -> Path:
             REPO_ROOT / "outputs" / "aes_hotflip_defense",
         )
     return _default_path(
-        "/root/autodl-tmp/aes_rudimentary_defense",
-        REPO_ROOT / "outputs" / "aes_rudimentary_defense",
+        "/root/autodl-tmp/aes_rudimentary_defense_v2",
+        REPO_ROOT / "outputs" / "aes_rudimentary_defense_v2",
     )
 
 
@@ -180,11 +180,21 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--hotflip-top-k-per-pos", type=int, default=2)
     parser.add_argument("--hotflip-max-candidates", type=int, default=16)
 
-    # Rudimentary defense uses one original-paper edit per selected sample.
+    # Rudimentary v2 composes several original-paper edits before scoring.
     parser.add_argument("--rudimentary-weight", type=float, default=1.0)
-    parser.add_argument("--rudimentary-tolerance", type=float, default=0.05)
+    parser.add_argument("--rudimentary-tolerance", type=float, default=0.0)
+    parser.add_argument(
+        "--rudimentary-relative-loss-power",
+        type=float,
+        default=1.0,
+    )
     parser.add_argument("--rudimentary-fraction", type=float, default=0.5)
     parser.add_argument("--rudimentary-candidates", type=int, default=16)
+    parser.add_argument(
+        "--rudimentary-edits-per-candidate",
+        type=int,
+        default=3,
+    )
     parser.add_argument(
         "--rudimentary-improvement-tolerance",
         type=float,
@@ -254,8 +264,14 @@ def build_config(
         "hotflip_tolerance": args.hotflip_tolerance,
         "rudimentary_weight": args.rudimentary_weight,
         "rudimentary_candidates": args.rudimentary_candidates,
+        "rudimentary_edits_per_candidate": (
+            args.rudimentary_edits_per_candidate
+        ),
         "rudimentary_fraction": args.rudimentary_fraction,
         "rudimentary_tolerance": args.rudimentary_tolerance,
+        "rudimentary_relative_loss_power": (
+            args.rudimentary_relative_loss_power
+        ),
         "rudimentary_improvement_tolerance": (
             args.rudimentary_improvement_tolerance
         ),
@@ -274,6 +290,7 @@ def validate_config(config: dict[str, Any]) -> None:
         "hotflip_top_k_per_pos",
         "hotflip_max_candidates",
         "rudimentary_candidates",
+        "rudimentary_edits_per_candidate",
     )
     for field in positive_integer_fields:
         if config[field] <= 0:
@@ -298,6 +315,10 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("rudimentary_weight must be non-negative")
     if config["rudimentary_tolerance"] < 0:
         raise ValueError("rudimentary_tolerance must be non-negative")
+    if config["rudimentary_relative_loss_power"] <= 0:
+        raise ValueError(
+            "rudimentary_relative_loss_power must be greater than zero"
+        )
     if config["rudimentary_improvement_tolerance"] < 0:
         raise ValueError(
             "rudimentary_improvement_tolerance must be non-negative"

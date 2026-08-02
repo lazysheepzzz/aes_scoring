@@ -9,7 +9,7 @@
 - 维护方式：每次修改实验协议、参数、数据划分、指标定义后，先更新本文件，再运行实验
 - 当前结论：冻结现有 fold0 数据划分；已有 checkpoint 和攻击结果通过资产审计后继续使用；只重跑受代码错误、损失变化、参数缺失直接影响的实验
 
-### 2026-07-29 执行状态补充
+### 2026-08-02 执行状态补充
 
 - C0 seed 42、D_HOTFLIP seed 42 及其正式 HotFlip 评估已完成。
 - Rudimentary 历史文件实际含 1,154 条，但缺少固定 seed、编辑预算、攻击文本
@@ -17,6 +17,10 @@
 - Rudimentary 正式攻击、D_RUDIMENTARY 训练和 checkpoint 选择现已接通；
   用户入口统一位于 `rudimentary/`，可执行命令以 `rudimentary/PLAN.md`
   为准。
+- D_RUDIMENTARY-v1 clean QWK=0.8396，但30-step正式ASR=0.9411，相对C0
+  只下降5.54个百分点，未达到主实验门槛。v1保留为消融；当前运行版本为
+  3-edit候选、零tolerance、线性相对虚高损失和30-step选择的
+  D_RUDIMENTARY-v2。
 - MLM-guided 旧结果仍因跨 tokenizer ID 使用等问题无效，待单独修复。
 
 ---

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run D_RUDIMENTARY with the shared AES stage-two configuration."""
+"""Run D_RUDIMENTARY-v2 with cumulative edits and linear inflation loss."""
 
 from __future__ import annotations
 

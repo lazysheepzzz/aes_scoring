@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select D_RUDIMENTARY using clean QWK and subset Rudimentary ASR."""
+"""Select D_RUDIMENTARY-v2 using clean QWK and 30-step subset ASR."""
 
 from __future__ import annotations
 

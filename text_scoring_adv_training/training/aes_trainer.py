@@ -78,8 +78,10 @@ class AESAdversarialConfig:
     use_rudimentary_edits: bool = False
     rudimentary_weight: float = 1.0
     rudimentary_candidates: int = 16
+    rudimentary_edits_per_candidate: int = 3
     rudimentary_fraction: float = 0.5
-    rudimentary_tolerance: float = 0.05
+    rudimentary_tolerance: float = 0.0
+    rudimentary_relative_loss_power: float = 1.0
     rudimentary_improvement_tolerance: float = 1e-6
 
     def __post_init__(self):
@@ -167,14 +169,17 @@ def one_sided_score_inflation_loss(
     target_scores: torch.Tensor,
     tolerance: float = 0.05,
     relative_weight: float = 0.5,
+    relative_loss_power: float = 2.0,
 ) -> torch.Tensor:
     """Penalize score inflation without pushing the clean prediction upward."""
+    if relative_loss_power <= 0:
+        raise ValueError("relative_loss_power must be greater than zero")
     gold_excess = torch.relu(
         adversarial_scores - target_scores - tolerance
     ).pow(2)
     relative_excess = torch.relu(
         adversarial_scores - clean_scores.detach() - tolerance
-    ).pow(2)
+    ).pow(relative_loss_power)
     return gold_excess.mean() + relative_weight * relative_excess.mean()
 
 
@@ -338,14 +343,17 @@ def run_rudimentary_one_row(
     scorer: AESScorer,
     *,
     max_candidates: int,
+    edits_per_candidate: int,
     max_length: int,
     device: str,
     autocast_dtype: Optional[torch.dtype] = None,
     improvement_tolerance: float = 1e-6,
 ) -> Optional[str]:
-    """Select one effective paper-style edit using true current-model scores."""
+    """Select a cumulative paper-style edit using true current-model scores."""
     if max_candidates <= 0:
         raise ValueError("max_candidates must be greater than zero")
+    if edits_per_candidate <= 0:
+        raise ValueError("edits_per_candidate must be greater than zero")
     if improvement_tolerance < 0:
         raise ValueError("improvement_tolerance must be non-negative")
 
@@ -360,9 +368,25 @@ def run_rudimentary_one_row(
         original_ids = original_ids.tolist()
     original_ids = tuple(int(token_id) for token_id in original_ids)
 
+    # Each initial variant contains one original-paper edit.  Extend every
+    # candidate independently so v2 learns against cumulative small gains
+    # without multiplying expensive model forward passes.
+    generated_candidates: List[str] = []
+    for initial_candidate in sample_variants(text, max_candidates):
+        candidate = initial_candidate
+        completed_edits = 1
+        while completed_edits < edits_per_candidate:
+            next_variants = sample_variants(candidate, 1)
+            if not next_variants:
+                break
+            candidate = next_variants[0]
+            completed_edits += 1
+        if completed_edits == edits_per_candidate:
+            generated_candidates.append(candidate)
+
     candidates: List[str] = []
     seen_token_sequences = {original_ids}
-    for candidate in sample_variants(text, max_candidates):
+    for candidate in generated_candidates:
         if not candidate.strip():
             continue
         candidate_ids = tokenizer(
@@ -610,6 +634,9 @@ class AESAdversarialTrainer:
                     b["texts"][index],
                     self.scorer,
                     max_candidates=cfg.rudimentary_candidates,
+                    edits_per_candidate=(
+                        cfg.rudimentary_edits_per_candidate
+                    ),
                     max_length=cfg.max_length,
                     device=self.device,
                     autocast_dtype=self.autocast_dtype,
@@ -651,14 +678,19 @@ class AESAdversarialTrainer:
             if cfg.use_hotflip_swaps:
                 attack_weight = cfg.hotflip_weight
                 attack_tolerance = cfg.hotflip_tolerance
+                relative_loss_power = 2.0
             else:
                 attack_weight = cfg.rudimentary_weight
                 attack_tolerance = cfg.rudimentary_tolerance
+                relative_loss_power = (
+                    cfg.rudimentary_relative_loss_power
+                )
             adversarial_loss = one_sided_score_inflation_loss(
                 clean_logits[loss_indices].float(),
                 adv_logits[loss_indices].float(),
                 labels[loss_indices].float(),
                 tolerance=attack_tolerance,
+                relative_loss_power=relative_loss_power,
             )
             total_loss = (
                 cfg.clean_loss_weight * base_loss

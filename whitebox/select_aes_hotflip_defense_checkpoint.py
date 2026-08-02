@@ -408,12 +408,12 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
     defense_name = (
         "aes_hotflip_defense_seed42"
         if attack == "hotflip"
-        else "aes_rudimentary_defense_seed42"
+        else "aes_rudimentary_defense_v2_seed42"
     )
     selection_name = (
         "aes_hotflip_checkpoint_selection_seed42"
         if attack == "hotflip"
-        else "aes_rudimentary_checkpoint_selection_seed42"
+        else "aes_rudimentary_defense_v2_checkpoint_selection_seed42"
     )
     parser = argparse.ArgumentParser(
         description=(
@@ -470,7 +470,11 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
         help="Random seed used by checkpoint attack evaluation.",
     )
     parser.add_argument("--qwk-tolerance", type=float, default=0.02)
-    parser.add_argument("--selection-steps", type=int, default=10)
+    parser.add_argument(
+        "--selection-steps",
+        type=int,
+        default=10 if attack == "hotflip" else 30,
+    )
     parser.add_argument("--success-threshold", type=float, default=0.1)
     parser.add_argument("--beam-size", type=int, default=1)
     parser.add_argument("--n-sample-pos", type=int, default=8)
