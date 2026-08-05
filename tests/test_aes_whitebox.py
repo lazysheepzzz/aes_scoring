@@ -13,6 +13,10 @@ import torch
 from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import (
     IterativeRudimentaryAttack,
 )
+from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import (
+    MLMGuidedAttack,
+    MLMGuidedCandidateGenerator,
+)
 from text_scoring_adv_training.evaluation.aes.evaluate import (
     AttackResult,
     evaluate_attack,
@@ -22,6 +26,7 @@ from text_scoring_adv_training.training.aes_trainer import (
     AESAdversarialConfig,
     build_adamw_parameter_groups,
     one_sided_score_inflation_loss,
+    quality_preserving_mlm_loss,
     run_rudimentary_one_row,
     tensor_to_float_numpy,
 )
@@ -29,6 +34,7 @@ from whitebox.aes_stage2_training_launcher import (
     CLEAN_CONTINUATION,
     HOTFLIP_DEFENSE,
     RUDIMENTARY_DEFENSE,
+    MLM_GUIDED_DEFENSE,
     build_config,
     build_parser,
 )
@@ -238,6 +244,72 @@ class AESRudimentaryAttackTest(unittest.TestCase):
         self.assertEqual(history, [])
 
 
+class AESMLMGuidedAttackTest(unittest.TestCase):
+    def test_mlm_ids_are_decoded_before_victim_reencoding(self):
+        class _MLMTokenizer:
+            mask_token_id = 99
+            all_special_ids = [0]
+
+            def __call__(self, _text, **_kwargs):
+                return {"input_ids": torch.tensor([[0, 10, 11, 0]])}
+
+            def decode(self, ids, **_kwargs):
+                self.decoded_ids = list(ids)
+                return "decoded candidate"
+
+        class _MLMModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(1))
+
+        class _SemanticFilter:
+            def filter(self, reference, candidates):
+                self.reference = reference
+                return [(candidate, 0.99) for candidate in candidates]
+
+        mlm_tokenizer = _MLMTokenizer()
+        generator = MLMGuidedCandidateGenerator(
+            mlm_tokenizer=mlm_tokenizer,
+            mlm_model=_MLMModel(),
+            mask_token_id=99,
+            mlm_special_ids={0},
+            semantic_filter=_SemanticFilter(),
+            n_sample_pos=1,
+            top_k_per_pos=1,
+            max_candidates=1,
+        )
+
+        with patch(
+            "text_scoring_adv_training.evaluation.aes.attacks."
+            "mlm_guided.build_replacement_map",
+            return_value={1: [77]},
+        ):
+            candidates = generator.generate(
+                "original essay",
+                reference_text="original essay",
+            )
+
+        self.assertEqual(mlm_tokenizer.decoded_ids, [0, 77, 11, 0])
+        self.assertEqual(candidates[0]["text"], "decoded candidate")
+
+        scorer = _FakeAttackScorer(
+            {"original essay": 1.0, "decoded candidate": 1.2},
+            token_count=20,
+        )
+        attack = MLMGuidedAttack(
+            scorer,
+            n_steps=1,
+            max_token_edit_rate=0.05,
+            candidate_generator=generator,
+        )
+        with patch.object(generator, "generate", return_value=candidates):
+            perturbed, history = attack.attack("original essay")
+
+        self.assertEqual(perturbed, "decoded candidate")
+        self.assertEqual(len(history), 1)
+        self.assertAlmostEqual(history[0]["cosine_similarity"], 0.99)
+
+
 class AESWhiteboxTrainingTest(unittest.TestCase):
     def test_one_sided_loss_does_not_push_clean_score_up(self):
         clean = torch.tensor([1.0], requires_grad=True)
@@ -273,6 +345,23 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         self.assertIsNone(clean.grad)
         self.assertAlmostEqual(float(adversarial.grad.item()), 0.5)
 
+    def test_mlm_quality_preserving_loss_uses_label_fidelity(self):
+        clean = torch.tensor([1.0], requires_grad=True)
+        adversarial = torch.tensor([1.2], requires_grad=True)
+        target = torch.tensor([1.1])
+
+        loss = quality_preserving_mlm_loss(
+            clean,
+            adversarial,
+            target,
+            tolerance=0.05,
+        )
+        loss.backward()
+
+        self.assertGreater(float(loss.item()), 0.0)
+        self.assertIsNone(clean.grad)
+        self.assertGreater(float(adversarial.grad.item()), 0.0)
+
     def test_legacy_margin_config_maps_to_tolerance(self):
         config = AESAdversarialConfig(hotflip_margin=0.1)
         self.assertEqual(config.hotflip_tolerance, 0.1)
@@ -281,24 +370,31 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         clean_args = build_parser(CLEAN_CONTINUATION).parse_args([])
         hotflip_args = build_parser(HOTFLIP_DEFENSE).parse_args([])
         rudimentary_args = build_parser(RUDIMENTARY_DEFENSE).parse_args([])
+        mlm_args = build_parser(MLM_GUIDED_DEFENSE).parse_args([])
         clean_config = build_config(clean_args, CLEAN_CONTINUATION)
         hotflip_config = build_config(hotflip_args, HOTFLIP_DEFENSE)
         rudimentary_config = build_config(
             rudimentary_args,
             RUDIMENTARY_DEFENSE,
         )
+        mlm_config = build_config(mlm_args, MLM_GUIDED_DEFENSE)
 
         intentionally_different = {
             "training_mode",
             "output_dir",
             "use_hotflip_swaps",
             "use_rudimentary_edits",
+            "use_mlm_guided",
         }
         shared_keys = set(clean_config) - intentionally_different
         self.assertEqual(shared_keys, set(hotflip_config) - intentionally_different)
         self.assertEqual(
             shared_keys,
             set(rudimentary_config) - intentionally_different,
+        )
+        self.assertEqual(
+            shared_keys,
+            set(mlm_config) - intentionally_different,
         )
         for key in shared_keys:
             self.assertEqual(clean_config[key], hotflip_config[key], key)
@@ -307,13 +403,20 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
                 rudimentary_config[key],
                 key,
             )
+            self.assertEqual(clean_config[key], mlm_config[key], key)
 
         self.assertFalse(clean_config["use_hotflip_swaps"])
         self.assertFalse(clean_config["use_rudimentary_edits"])
+        self.assertFalse(clean_config["use_mlm_guided"])
         self.assertTrue(hotflip_config["use_hotflip_swaps"])
         self.assertFalse(hotflip_config["use_rudimentary_edits"])
+        self.assertFalse(hotflip_config["use_mlm_guided"])
         self.assertFalse(rudimentary_config["use_hotflip_swaps"])
         self.assertTrue(rudimentary_config["use_rudimentary_edits"])
+        self.assertFalse(rudimentary_config["use_mlm_guided"])
+        self.assertFalse(mlm_config["use_hotflip_swaps"])
+        self.assertFalse(mlm_config["use_rudimentary_edits"])
+        self.assertTrue(mlm_config["use_mlm_guided"])
         self.assertEqual(clean_config["precision"], "bfloat16")
         self.assertEqual(rudimentary_config["rudimentary_tolerance"], 0.0)
         self.assertEqual(

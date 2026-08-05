@@ -5,15 +5,25 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="deccfe76-bdf0-4170-933c-79005d98fa9b" name="更改" comment="first">
+      <change afterPath="$PROJECT_DIR$/mlm_guided/evaluate_aes_mlm_guided.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/mlm_guided/run_aes_mlm_guided_adv_training.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/mlm_guided/select_aes_mlm_guided_defense_checkpoint.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/eval_defended.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/hotflip_defended_progress.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/hotflip_defended_result.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/hotflip_valid_1154_progress.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/hotflip_valid_1154_result.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/run_aes_adv_v4.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/run_aes_eval_v4.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/whitebox/run_hotflip_valid_1154.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/AES_ATTACK_PLAN.md" beforeDir="false" afterPath="$PROJECT_DIR$/AES_ATTACK_PLAN.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/environment.txt" beforeDir="false" afterPath="$PROJECT_DIR$/environment.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mlm_guided/mlm_guided_summary.md" beforeDir="false" afterPath="$PROJECT_DIR$/mlm_guided/mlm_guided_summary.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/mlm_guided/run_mlm_guided_full1134_thresh.py" beforeDir="false" afterPath="$PROJECT_DIR$/mlm_guided/run_mlm_guided_full1134_thresh.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plan.md" beforeDir="false" afterPath="$PROJECT_DIR$/plan.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/rudimentary/PLAN.md" beforeDir="false" afterPath="$PROJECT_DIR$/rudimentary/PLAN.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_aes_whitebox.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_aes_whitebox.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/text_scoring_adv_training/evaluation/aes/attacks/mlm_guided.py" beforeDir="false" afterPath="$PROJECT_DIR$/text_scoring_adv_training/evaluation/aes/attacks/mlm_guided.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/text_scoring_adv_training/evaluation/aes/mlm_guided.py" beforeDir="false" afterPath="$PROJECT_DIR$/text_scoring_adv_training/evaluation/aes/mlm_guided.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/text_scoring_adv_training/evaluation/aes/run_attacks.py" beforeDir="false" afterPath="$PROJECT_DIR$/text_scoring_adv_training/evaluation/aes/run_attacks.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/text_scoring_adv_training/training/aes_trainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/text_scoring_adv_training/training/aes_trainer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/whitebox/aes_stage2_training_launcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/whitebox/aes_stage2_training_launcher.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/whitebox/eval_hotflip_defended.py" beforeDir="false" afterPath="$PROJECT_DIR$/whitebox/eval_hotflip_defended.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/whitebox/run_aes_attacks.py" beforeDir="false" afterPath="$PROJECT_DIR$/whitebox/run_aes_attacks.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/whitebox/select_aes_hotflip_defense_checkpoint.py" beforeDir="false" afterPath="$PROJECT_DIR$/whitebox/select_aes_hotflip_defense_checkpoint.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -37,23 +47,23 @@
 }</component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.6248227412493847" />
-      <entry key="MS500" value="3.5894122224154366" />
-      <entry key="S2" value="6.97920732390652" />
-      <entry key="S5" value="8.579008508559905" />
-      <entry key="S10" value="9.594085902078355" />
-      <entry key="S30" value="17.589322903385384" />
-      <entry key="S60" value="28.0121539250064" />
-      <entry key="M2" value="40.95435956958203" />
-      <entry key="M5" value="61.65410032216482" />
-      <entry key="M10" value="77.78347075188911" />
-      <entry key="M15" value="86.78444978685826" />
-      <entry key="M30" value="101.7025522109111" />
-      <entry key="H1" value="114.48805347484802" />
-      <entry key="H2" value="123.4511747014614" />
-      <entry key="H4" value="128.90303905489128" />
-      <entry key="D1" value="138.4621833434372" />
-      <entry key="W1" value="144.53903097165386" />
+      <entry key="MS100" value="1.0159564368513883" />
+      <entry key="MS500" value="2.42380109660305" />
+      <entry key="S2" value="6.538760624256926" />
+      <entry key="S5" value="8.821313557006262" />
+      <entry key="S10" value="10.160620713069006" />
+      <entry key="S30" value="18.32033236169358" />
+      <entry key="S60" value="28.79713613289396" />
+      <entry key="M2" value="41.796876509897054" />
+      <entry key="M5" value="62.55915853490426" />
+      <entry key="M10" value="78.72355789202518" />
+      <entry key="M15" value="87.73988014376431" />
+      <entry key="M30" value="102.67643331176109" />
+      <entry key="H1" value="115.4733513170752" />
+      <entry key="H2" value="124.44324786165014" />
+      <entry key="H4" value="129.89890053556493" />
+      <entry key="D1" value="139.46144242983823" />
+      <entry key="W1" value="145.53892048126926" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -75,23 +85,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="1.5661012403032835" />
-      <entry key="MS500" value="3.5179273796189525" />
-      <entry key="S2" value="6.926571077247174" />
-      <entry key="S5" value="8.552003250740645" />
-      <entry key="S10" value="9.578676785017707" />
-      <entry key="S30" value="17.579559159398258" />
-      <entry key="S60" value="28.004630886342866" />
-      <entry key="M2" value="40.9492923748313" />
-      <entry key="M5" value="61.65143921878714" />
-      <entry key="M10" value="77.78192448459887" />
-      <entry key="M15" value="86.78333992669936" />
-      <entry key="M30" value="101.70193000041179" />
-      <entry key="H1" value="114.48771256960784" />
-      <entry key="H2" value="123.45099361476554" />
-      <entry key="H4" value="128.90294525539807" />
-      <entry key="D1" value="138.4621668353513" />
-      <entry key="W1" value="144.53902853995604" />
+      <entry key="MS100" value="0.025200184214361567" />
+      <entry key="MS500" value="1.7921123456657966" />
+      <entry key="S2" value="6.290596873035161" />
+      <entry key="S5" value="8.708373752869324" />
+      <entry key="S10" value="10.100727329604435" />
+      <entry key="S30" value="18.295425102042387" />
+      <entry key="S60" value="28.78199496513117" />
+      <entry key="M2" value="41.787983469400025" />
+      <entry key="M5" value="62.554961619036334" />
+      <entry key="M10" value="78.72124256393077" />
+      <entry key="M15" value="87.73825728643676" />
+      <entry key="M30" value="102.6755544445002" />
+      <entry key="H1" value="115.47288203908971" />
+      <entry key="H2" value="124.44300257625885" />
+      <entry key="H4" value="129.89877463340628" />
+      <entry key="D1" value="139.46142057082292" />
+      <entry key="W1" value="145.53891728514046" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -140,7 +150,11 @@
       <workItem from="1784398223220" duration="1094000" />
       <workItem from="1784399322583" duration="11752000" />
       <workItem from="1785131217857" duration="19567000" />
-      <workItem from="1785217868453" duration="2122000" />
+      <workItem from="1785217868453" duration="44743000" />
+      <workItem from="1785551088414" duration="14000" />
+      <workItem from="1785643851201" duration="22680000" />
+      <workItem from="1785825503688" duration="21000" />
+      <workItem from="1785950425953" duration="604000" />
     </task>
     <task id="LOCAL-00001" summary="first">
       <option name="closed" value="true" />
@@ -182,7 +196,103 @@
       <option name="project" value="LOCAL" />
       <updated>1785218111054</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="first">
+      <option name="closed" value="true" />
+      <created>1785220006749</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1785220006749</updated>
+    </task>
+    <task id="LOCAL-00007" summary="first">
+      <option name="closed" value="true" />
+      <created>1785220181146</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1785220181146</updated>
+    </task>
+    <task id="LOCAL-00008" summary="first">
+      <option name="closed" value="true" />
+      <created>1785220251345</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1785220251345</updated>
+    </task>
+    <task id="LOCAL-00009" summary="first">
+      <option name="closed" value="true" />
+      <created>1785222535311</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1785222535311</updated>
+    </task>
+    <task id="LOCAL-00010" summary="first">
+      <option name="closed" value="true" />
+      <created>1785228635910</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1785228635910</updated>
+    </task>
+    <task id="LOCAL-00011" summary="first">
+      <option name="closed" value="true" />
+      <created>1785229575110</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1785229575110</updated>
+    </task>
+    <task id="LOCAL-00012" summary="first">
+      <option name="closed" value="true" />
+      <created>1785301356830</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1785301356830</updated>
+    </task>
+    <task id="LOCAL-00013" summary="first">
+      <option name="closed" value="true" />
+      <created>1785301624908</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1785301624908</updated>
+    </task>
+    <task id="LOCAL-00014" summary="first">
+      <option name="closed" value="true" />
+      <created>1785328956074</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1785328956074</updated>
+    </task>
+    <task id="LOCAL-00015" summary="first">
+      <option name="closed" value="true" />
+      <created>1785336454393</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1785336454393</updated>
+    </task>
+    <task id="LOCAL-00016" summary="first">
+      <option name="closed" value="true" />
+      <created>1785336909576</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1785336909576</updated>
+    </task>
+    <task id="LOCAL-00017" summary="first">
+      <option name="closed" value="true" />
+      <created>1785661064987</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1785661064988</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

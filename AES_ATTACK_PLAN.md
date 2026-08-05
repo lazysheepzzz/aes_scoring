@@ -1,5 +1,7 @@
 # AES Robustness Evaluation Plan
 
+> 历史设计草案。正式统一协议以根目录 `plan.md` 和各攻击目录说明为准。
+
 ## 目标
 
 在 `D:\here\robust_text_scoring-main/` 下，参考论文源码结构，新增 AES 鲁棒性评估框架。对 DeBERTa-v3-base AES victim（`D:\deberta_last\reproduction_yekenot_deberta_reg\outputs_kaggle_4090_1024\checkpoints\fold0_best`）进行四类攻击评测。
@@ -12,7 +14,7 @@
 |---------|------|---------|---------|
 | **Rudimentary** | 字符/词随机编辑 | 拼写错误、词序乱、词重复 | ❌ 规则 |
 | **HotFlip** | 梯度引导 token 替换 | 找能让 DeBERTa 打更高分的词替换 | ✅ 白盒（用 victim 梯度） |
-| **MLM-guided** | MLM 候选 + scorer 选最优 | WordNet 同义词替换 + scorer 验证 | ❌ 规则 + scorer |
+| **MLM-guided** | MLM 候选 + scorer 选最优 | ModernBERT 候选 + 语义过滤 + scorer 验证 | ❌ 规则 + scorer |
 | **Injection** | 插入无关内容 | 插入无关句子、复写自身句子 | ❌ 规则 |
 
 ---
@@ -28,7 +30,7 @@ D:\here\robust_text_scoring-main\text_scoring_adv_training\
 │       │   ├── injection.py          # 无关句子插入、整句复写、结构模板
 │       │   ├── rudimentary.py        # 字符/词级编辑（复制论文）
 │       │   ├── hotflip.py           # 梯度引导词替换
-│       │   └── mlm_guided.py        # WordNet 同义词 + scorer 验证
+│       │   └── mlm_guided.py        # ModernBERT 候选 + 语义过滤 + scorer 验证
 │       ├── scorer.py                 # DeBERTa AES victim 封装
 │       ├── evaluate.py               # 统一评测框架
 │       └── run_attacks.py           # 入口脚本
@@ -78,18 +80,16 @@ D:\here\robust_text_scoring-main\text_scoring_adv_training\
 
 ### 3. MLM-guided（语义候选 + scorer 选）
 
-**不用 LLM，用 WordNet + DeBERTa scorer 验证**。
+**不用生成式 LLM；用 ModernBERT masked-LM、MiniLM 语义过滤和 DeBERTa
+scorer 验证**。完整参数以 `plan.md` 7.4 节为准。
 
 ```python
 # 步骤
-# 1. 对 essay 中每个实义词（noun/verb/adj/adv），查 WordNet 同义词集
-# 2. 过滤：只保留 WordNet similarity ≥ 0.9 的替换对
-#    （语义高度等价，人类认为质量相同）
-# 3. 对每个候选替换 → scorer(text) → 记录分数变化
-# 4. 如果替换后分数显著上升（> 某阈值）→ 攻击成功
+# 1. 用 ModernBERT tokenizer 编码并掩码采样位置
+# 2. ModernBERT 生成候选 ID，并由自己的 tokenizer decode 为文本
+# 3. 只保留 MiniLM cosine similarity ≥ 0.90 的候选
+# 4. 候选文本由 DeBERTa tokenizer 独立编码并真实评分
 ```
-
-**为什么用 WordNet sim ≥ 0.9**：解决 "good→beneficial" 这类"人类觉得涨分"的问题。sim < 0.9 说明词义偏离，替换后分数变化可能是合理的，不算模型被骗。
 
 ---
 

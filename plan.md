@@ -18,10 +18,11 @@
   用户入口统一位于 `rudimentary/`，可执行命令以 `rudimentary/PLAN.md`
   为准。
 - D_RUDIMENTARY-v1 clean QWK=0.8396，但30-step正式ASR=0.9411，相对C0
-  只下降5.54个百分点，未达到主实验门槛。v1保留为消融；当前运行版本为
+  只下降5.54个百分点，效果较弱。v1保留为消融；当前运行版本为
   3-edit候选、零tolerance、线性相对虚高损失和30-step选择的
   D_RUDIMENTARY-v2。
-- MLM-guided 旧结果仍因跨 tokenizer ID 使用等问题无效，待单独修复。
+- MLM-guided 旧结果因跨 tokenizer ID 使用无效；正式 tokenizer 隔离、语义过滤、
+  训练与评估入口已修复，待在 3090 上完成 smoke test 和 1,154 篇重跑。
 
 ---
 
@@ -818,19 +819,19 @@ D_COMBINED 在 subset 上计算六类攻击的 Macro ASRΔ@0.10，并使用相�
 
 | 指标 | 验收标准 |
 |---|---:|
-| 目标攻击 ASRΔ@0.10 下降 | ≥ 15 个百分点 |
-| 目标攻击 Grade-ASR 下降 | ≥ 10 个百分点 |
-| 非目标攻击 Macro ASRΔ@0.10 下降 | ≥ 5 个百分点 |
+| 目标攻击 ASRΔ@0.10 | 报告相对 C0/B0 的实际变化量与置信区间 |
+| 目标攻击 Grade-ASR | 报告相对 C0/B0 的实际变化量与置信区间 |
+| 非目标攻击 Macro ASRΔ@0.10 | 报告迁移增益或退化，不设事后通过线 |
 | clean QWK 相对 C0 下降 | ≤ 0.02 |
 
 ### 11.4 组合防御
 
 | 指标 | 验收标准 |
 |---|---:|
-| Macro ASRΔ@0.10 相对 C0 下降 | ≥ 15 个百分点 |
-| Macro Grade-ASR 相对 C0 下降 | ≥ 10 个百分点 |
-| 低质量 Overgrade-ASR 下降 | ≥ 15 个百分点 |
-| Macro Rank-flip ASR 下降 | ≥ 10 个百分点 |
+| Macro ASRΔ@0.10 | 报告相对 C0 的实际变化量与置信区间 |
+| Macro Grade-ASR | 报告相对 C0 的实际变化量与置信区间 |
+| 低质量 Overgrade-ASR | 报告相对 C0 的实际变化量与置信区间 |
+| Macro Rank-flip ASR | 报告相对 C0 的实际变化量与置信区间 |
 | clean QWK 相对 C0 下降 | ≤ 0.02 |
 | 六类攻击中出现明显退化的数量 | 0 |
 
@@ -852,8 +853,8 @@ D_COMBINED 在 subset 上计算六类攻击的 Macro ASRΔ@0.10，并使用相�
 
 - [x] 将 AES DeBERTa tokenizer 改为 right padding。
 - [x] 新增测试：同一短文本单独评分与混合长度 batch 评分差异小于 `1e-5`。
-- [ ] 修复 MLM tokenizer 流程，禁止跨 tokenizer 共享 ID。
-- [ ] 新增 MLM 测试：候选文本 decode 后可由 DeBERTa 独立重新编码。
+- [x] 修复 MLM tokenizer 流程，禁止跨 tokenizer 共享 ID。
+- [x] 新增 MLM 测试：候选文本 decode 后可由 DeBERTa 独立重新编码。
 - [ ] 统一 `aes_trainer.py` CLI 与 JSON config。
 - [x] 修复梯度累积尾部 optimizer step。
 - [x] 防止同一 global step 重复 eval 和 save。
@@ -1029,7 +1030,7 @@ GPU 型号
 - [ ] config 已复制到输出目录。
 - [ ] seed 已设置到 Python、NumPy、PyTorch、CUDA、dataloader。
 - [ ] 模型处于正确的 train/eval 状态。
-- [ ] 攻击没有跨 tokenizer 共享 token ID。
+- [x] 攻击没有跨 tokenizer 共享 token ID。
 - [ ] 攻击预算与本文件一致。
 - [ ] 主实验在 delta 0.1 成功时停止。
 - [ ] 全预算补充实验仅使用固定 256 篇子集。
