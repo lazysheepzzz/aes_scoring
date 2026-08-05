@@ -489,6 +489,10 @@ answerdotai/ModernBERT-large
 | candidates | 16 |
 | minimum_cosine_similarity | 0.90 |
 
+训练候选离线批量生成一次：每篇固定采样 1 个位置并取 MLM top-16，缓存通过
+语义过滤的替换规格。训练时当前 victim 仍对候选做真实评分并选优，但不重复
+加载或运行 ModernBERT/MiniLM。
+
 ### 7.5 Injection
 
 包含两个固定子类：

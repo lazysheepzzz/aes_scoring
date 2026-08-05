@@ -30,7 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import (
-    MLMGuidedCandidateGenerator,
+    CachedMLMTrainingCandidateGenerator,
 )
 from text_scoring_adv_training.evaluation.robustness_tests.common.hotflip import (
     _sample_positions,
@@ -90,8 +90,8 @@ class AESAdversarialConfig:
     mlm_weight: float = 1.0
     mlm_fraction: float = 0.5
     mlm_candidates: int = 16
-    mlm_n_sample_pos: int = 8
-    mlm_top_k_per_pos: int = 2
+    mlm_n_sample_pos: int = 1
+    mlm_top_k_per_pos: int = 16
     mlm_tolerance: float = 0.05
     mlm_improvement_tolerance: float = 1e-6
     mlm_model_name: str = "answerdotai/ModernBERT-large"
@@ -100,6 +100,9 @@ class AESAdversarialConfig:
     )
     mlm_minimum_cosine_similarity: float = 0.90
     mlm_max_length: int = 8192
+    mlm_candidate_cache: str = (
+        "artifacts/mlm_guided/training_candidate_pool_seed42.jsonl"
+    )
 
     def __post_init__(self):
         if self.hotflip_margin is not None:
@@ -490,7 +493,7 @@ def run_rudimentary_one_row(
 
 def run_mlm_guided_one_row(
     text: str,
-    candidate_generator: MLMGuidedCandidateGenerator,
+    candidate_generator: CachedMLMTrainingCandidateGenerator,
     scorer: AESScorer,
     *,
     max_length: int,
@@ -598,25 +601,34 @@ class AESAdversarialTrainer:
         self.mlm_candidate_generator = None
         if config.use_mlm_guided:
             print(
-                f"Loading MLM candidate model {config.mlm_model_name} and "
-                f"similarity model {config.mlm_similarity_model_name}...",
+                f"Loading cached MLM training candidates from "
+                f"{config.mlm_candidate_cache}...",
                 flush=True,
             )
-            self.mlm_candidate_generator = MLMGuidedCandidateGenerator(
-                mlm_model_name=config.mlm_model_name,
-                similarity_model_name=config.mlm_similarity_model_name,
-                device=self.device,
-                dtype=(
-                    torch.bfloat16
-                    if self.device == "cuda"
-                    else torch.float32
-                ),
-                n_sample_pos=config.mlm_n_sample_pos,
-                top_k_per_pos=config.mlm_top_k_per_pos,
-                max_candidates=config.mlm_candidates,
-                minimum_similarity=config.mlm_minimum_cosine_similarity,
-                mlm_max_length=config.mlm_max_length,
+            self.mlm_candidate_generator = (
+                CachedMLMTrainingCandidateGenerator(
+                    config.mlm_candidate_cache
+                )
             )
+            if (
+                self.mlm_candidate_generator.mlm_model_name
+                != config.mlm_model_name
+            ):
+                raise ValueError("MLM candidate cache model does not match config")
+            if (
+                self.mlm_candidate_generator.similarity_model_name
+                != config.mlm_similarity_model_name
+            ):
+                raise ValueError(
+                    "MLM candidate cache similarity model does not match config"
+                )
+            if not math.isclose(
+                float(self.mlm_candidate_generator.minimum_similarity),
+                config.mlm_minimum_cosine_similarity,
+            ):
+                raise ValueError(
+                    "MLM candidate cache similarity threshold does not match config"
+                )
 
         specials = set(self.tokenizer.all_special_ids)
         if self.tokenizer.pad_token_id is not None:
@@ -625,6 +637,16 @@ class AESAdversarialTrainer:
 
         self.train_dataset = KaggleEssayDataset(config.train_csv, self.tokenizer, config.max_length)
         self.valid_dataset = KaggleEssayDataset(config.valid_csv, self.tokenizer, config.max_length)
+        if self.mlm_candidate_generator is not None:
+            missing_candidate_records = sum(
+                not self.mlm_candidate_generator.has_text(item["text"])
+                for item in self.train_dataset.items
+            )
+            if missing_candidate_records:
+                raise ValueError(
+                    f"MLM candidate cache is incomplete: "
+                    f"{missing_candidate_records} training essays are missing"
+                )
         print(f"Train: {len(self.train_dataset)}, Valid: {len(self.valid_dataset)}", flush=True)
 
         self.collator = AESCollator(self.tokenizer, config.max_length)

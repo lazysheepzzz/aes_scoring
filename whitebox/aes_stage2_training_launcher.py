@@ -100,8 +100,8 @@ def _default_output_dir(training_mode: str) -> Path:
             REPO_ROOT / "outputs" / "aes_rudimentary_defense_v2",
         )
     return _default_path(
-        "/root/autodl-tmp/aes_mlm_guided_defense",
-        REPO_ROOT / "outputs" / "aes_mlm_guided_defense",
+        "/root/autodl-tmp/aes_mlm_guided_defense_cached",
+        REPO_ROOT / "outputs" / "aes_mlm_guided_defense_cached",
     )
 
 
@@ -213,8 +213,8 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--mlm-weight", type=float, default=1.0)
     parser.add_argument("--mlm-fraction", type=float, default=0.5)
     parser.add_argument("--mlm-candidates", type=int, default=16)
-    parser.add_argument("--mlm-n-sample-pos", type=int, default=8)
-    parser.add_argument("--mlm-top-k-per-pos", type=int, default=2)
+    parser.add_argument("--mlm-n-sample-pos", type=int, default=1)
+    parser.add_argument("--mlm-top-k-per-pos", type=int, default=16)
     parser.add_argument("--mlm-tolerance", type=float, default=0.05)
     parser.add_argument(
         "--mlm-improvement-tolerance",
@@ -235,6 +235,17 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         default=0.90,
     )
     parser.add_argument("--mlm-max-length", type=int, default=8192)
+    parser.add_argument(
+        "--mlm-candidate-cache",
+        type=Path,
+        default=(
+            REPO_ROOT
+            / "artifacts"
+            / "mlm_guided"
+            / "training_candidate_pool_seed42.jsonl"
+        ),
+        help="Offline semantic MLM candidate pool prepared before D_MLM training.",
+    )
 
     parser.add_argument(
         "--hf-home",
@@ -324,6 +335,7 @@ def build_config(
             args.mlm_minimum_cosine_similarity
         ),
         "mlm_max_length": args.mlm_max_length,
+        "mlm_candidate_cache": str(args.mlm_candidate_cache),
     }
 
 
@@ -428,6 +440,12 @@ def main(training_mode: str) -> int:
         raise FileNotFoundError(f"Training CSV not found: {args.train_csv}")
     if not args.valid_csv.is_file():
         raise FileNotFoundError(f"Validation CSV not found: {args.valid_csv}")
+    if training_mode == MLM_GUIDED_DEFENSE and not args.mlm_candidate_cache.is_file():
+        raise FileNotFoundError(
+            "MLM training candidate cache not found: "
+            f"{args.mlm_candidate_cache}. Run "
+            "mlm_guided/prepare_aes_mlm_training_candidates.py first."
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     config_path.write_text(

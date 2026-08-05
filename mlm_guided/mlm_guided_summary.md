@@ -11,6 +11,7 @@ ModernBERT，再把 ModernBERT ID 写回 DeBERTa 序列；不同 tokenizer 中�
 
 - 攻击：`text_scoring_adv_training/evaluation/aes/attacks/mlm_guided.py`
 - 正式评估：`mlm_guided/evaluate_aes_mlm_guided.py`
+- 训练候选缓存：`mlm_guided/prepare_aes_mlm_training_candidates.py`
 - D_MLM 训练：`mlm_guided/run_aes_mlm_guided_adv_training.py`
 - checkpoint 选择：`mlm_guided/select_aes_mlm_guided_defense_checkpoint.py`
 
@@ -44,9 +45,14 @@ AES 专用代码只调用它生成 ModernBERT 候选。
 | 随机种子 | 42 |
 | 正式样本数 | 1,154 |
 
-训练候选只做 1 步攻击，优化 `plan.md` 中预先规定的质量保持损失：对抗文本
-贴近真实标签，同时惩罚其相对 clean prediction 的分数虚高。训练数据、优化器、
-epoch、batch size、学习率和 C0/其他防御保持对齐。
+训练候选只做 1 步攻击：每篇作文固定采样 1 个位置，取 MLM top-16，经语义
+过滤后缓存替换规格。该候选生成与 victim 参数无关，因此只需离线执行一次。
+训练的每次前向仍由当前 DeBERTa 在候选池中选择真实分数最高的候选，保持
+model-aware。训练时不加载 ModernBERT 或 MiniLM。
+
+优化 `plan.md` 中预先规定的质量保持损失：对抗文本贴近真实标签，同时惩罚其
+相对 clean prediction 的分数虚高。训练数据、优化器、epoch、batch size、学习率
+和 C0/其他防御保持对齐。
 
 ## 第一次运行
 
@@ -60,3 +66,21 @@ python .\mlm_guided\evaluate_aes_mlm_guided.py `
 ```
 
 smoke 成功后，后续命令不再带 `--online`，使用本地缓存。
+
+## D_MLM 运行顺序
+
+先一次性批量生成训练候选。该过程支持中断续跑；不要对续跑命令使用
+`--force`：
+
+```powershell
+python .\mlm_guided\prepare_aes_mlm_training_candidates.py `
+  --seed 42 --batch-size 8
+```
+
+缓存完成后训练；训练阶段只加载 DeBERTa 和 tokenizer：
+
+```powershell
+python .\mlm_guided\run_aes_mlm_guided_adv_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_mlm_guided_defense_cached_seed42
+```

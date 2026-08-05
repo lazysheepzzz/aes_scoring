@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the D_MLM quality-preserving adversarial defense."""
+"""Train D_MLM from a cached, semantically filtered candidate pool."""
 
 from __future__ import annotations
 

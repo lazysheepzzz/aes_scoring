@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,8 +15,10 @@ from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import (
     IterativeRudimentaryAttack,
 )
 from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import (
+    CachedMLMTrainingCandidateGenerator,
     MLMGuidedAttack,
     MLMGuidedCandidateGenerator,
+    _text_sha256,
 )
 from text_scoring_adv_training.evaluation.aes.evaluate import (
     AttackResult,
@@ -308,6 +311,45 @@ class AESMLMGuidedAttackTest(unittest.TestCase):
         self.assertEqual(perturbed, "decoded candidate")
         self.assertEqual(len(history), 1)
         self.assertAlmostEqual(history[0]["cosine_similarity"], 0.99)
+
+    def test_cached_training_pool_decodes_without_loading_mlm_model(self):
+        class _Tokenizer:
+            def __call__(self, _text, **_kwargs):
+                return {"input_ids": [0, 10, 11, 0]}
+
+            def decode(self, ids, **_kwargs):
+                return "cached candidate " + "-".join(map(str, ids))
+
+        text = "original essay"
+        record = {
+            "text_sha256": _text_sha256(text),
+            "mlm_model_name": "fake-mlm",
+            "mlm_max_length": 128,
+            "replacements": [
+                {
+                    "mlm_position": 1,
+                    "mlm_old_id": 10,
+                    "mlm_new_id": 77,
+                    "cosine_similarity": 0.99,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "pool.jsonl"
+            cache_path.write_text(
+                json.dumps(record) + "\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "text_scoring_adv_training.evaluation.aes.attacks."
+                "mlm_guided.AutoTokenizer.from_pretrained",
+                return_value=_Tokenizer(),
+            ):
+                generator = CachedMLMTrainingCandidateGenerator(cache_path)
+                candidates = generator.generate(text)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("0-77-11-0", candidates[0]["text"])
 
 
 class AESWhiteboxTrainingTest(unittest.TestCase):

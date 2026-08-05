@@ -7,7 +7,10 @@ tokenizer independently encodes those texts for scoring.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import random
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -22,6 +25,7 @@ from text_scoring_adv_training.evaluation.robustness_tests.common.mlm import (
 __all__ = [
     "MLMGuidedAttack",
     "MLMGuidedCandidateGenerator",
+    "CachedMLMTrainingCandidateGenerator",
     "SemanticSimilarityFilter",
 ]
 
@@ -65,25 +69,28 @@ class SemanticSimilarityFilter:
             parameter.requires_grad_(False)
 
     @torch.inference_mode()
-    def encode(self, texts: Sequence[str]) -> torch.Tensor:
-        encoded = self.tokenizer(
-            list(texts),
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.max_length,
-            padding=True,
-        )
-        encoded = {
-            key: value.to(self.device)
-            for key, value in encoded.items()
-            if isinstance(value, torch.Tensor)
-        }
-        outputs = self.model(**encoded)
-        token_embeddings = outputs.last_hidden_state.float()
-        attention_mask = encoded["attention_mask"].unsqueeze(-1).float()
-        pooled = (token_embeddings * attention_mask).sum(dim=1)
-        pooled = pooled / attention_mask.sum(dim=1).clamp_min(1.0)
-        return F.normalize(pooled, p=2, dim=1)
+    def encode(self, texts: Sequence[str], batch_size: int = 64) -> torch.Tensor:
+        embeddings: List[torch.Tensor] = []
+        for start in range(0, len(texts), batch_size):
+            encoded = self.tokenizer(
+                list(texts[start : start + batch_size]),
+                return_tensors="pt",
+                truncation=True,
+                max_length=self.max_length,
+                padding=True,
+            )
+            encoded = {
+                key: value.to(self.device)
+                for key, value in encoded.items()
+                if isinstance(value, torch.Tensor)
+            }
+            outputs = self.model(**encoded)
+            token_embeddings = outputs.last_hidden_state.float()
+            attention_mask = encoded["attention_mask"].unsqueeze(-1).float()
+            pooled = (token_embeddings * attention_mask).sum(dim=1)
+            pooled = pooled / attention_mask.sum(dim=1).clamp_min(1.0)
+            embeddings.append(F.normalize(pooled, p=2, dim=1))
+        return torch.cat(embeddings, dim=0)
 
     def filter(
         self,
@@ -99,6 +106,37 @@ class SemanticSimilarityFilter:
             for candidate, similarity in zip(candidates, similarities)
             if float(similarity.item()) >= self.minimum_similarity
         ]
+
+    def filter_groups(
+        self,
+        references: Sequence[str],
+        candidate_groups: Sequence[Sequence[str]],
+    ) -> List[List[Tuple[str, float]]]:
+        """Filter several candidate groups with one batched encoder pass."""
+        flat_candidates = [
+            candidate
+            for group in candidate_groups
+            for candidate in group
+        ]
+        if not flat_candidates:
+            return [[] for _ in references]
+        embeddings = self.encode([*references, *flat_candidates])
+        reference_embeddings = embeddings[: len(references)]
+        candidate_embeddings = embeddings[len(references) :]
+        output: List[List[Tuple[str, float]]] = []
+        offset = 0
+        for reference_index, group in enumerate(candidate_groups):
+            group_embeddings = candidate_embeddings[offset : offset + len(group)]
+            similarities = group_embeddings @ reference_embeddings[reference_index]
+            output.append(
+                [
+                    (candidate, float(similarity.item()))
+                    for candidate, similarity in zip(group, similarities)
+                    if float(similarity.item()) >= self.minimum_similarity
+                ]
+            )
+            offset += len(group)
+        return output
 
 
 class MLMGuidedCandidateGenerator:
@@ -122,6 +160,7 @@ class MLMGuidedCandidateGenerator:
         mask_token_id: Optional[int] = None,
         mlm_special_ids: Optional[set[int]] = None,
         semantic_filter: Optional[SemanticSimilarityFilter] = None,
+        training_position_seed: int = 42,
     ):
         positive = {
             "n_sample_pos": n_sample_pos,
@@ -169,6 +208,7 @@ class MLMGuidedCandidateGenerator:
         self.minimum_similarity = minimum_similarity
         self.mlm_max_length = mlm_max_length
         self.mlm_batch_size = mlm_batch_size
+        self.training_position_seed = int(training_position_seed)
         self.semantic_filter = semantic_filter or SemanticSimilarityFilter(
             similarity_model_name,
             device=device,
@@ -255,6 +295,197 @@ class MLMGuidedCandidateGenerator:
             for candidate_text, position, old_id, new_id in raw
             if candidate_text in similarity_by_text
         ]
+
+    @torch.inference_mode()
+    def generate_batch_for_training(
+        self,
+        texts: Sequence[str],
+    ) -> List[List[Dict[str, Any]]]:
+        """Generate one-position/top-k pools for offline training caching.
+
+        Unlike formal iterative evaluation, training needs one attack step and
+        16 candidates. Masking one sampled position in every essay lets a
+        whole essay batch share one ModernBERT forward pass.
+        """
+        if self.n_sample_pos != 1:
+            raise ValueError(
+                "Batched training generation requires n_sample_pos=1"
+            )
+        encoded = self.mlm_tokenizer(
+            list(texts),
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.mlm_max_length,
+            padding=True,
+        )
+        input_ids = encoded["input_ids"]
+        attention_mask = encoded["attention_mask"]
+        positions: List[Optional[int]] = []
+        for row_ids, row_attention in zip(input_ids, attention_mask):
+            editable = [
+                index
+                for index, (token_id, attends) in enumerate(
+                    zip(row_ids.tolist(), row_attention.tolist())
+                )
+                if attends and int(token_id) not in self.mlm_special_ids
+            ]
+            if editable:
+                text_seed = int(_text_sha256(texts[len(positions)])[:16], 16)
+                generator = random.Random(text_seed ^ self.training_position_seed)
+                positions.append(generator.choice(editable))
+            else:
+                positions.append(None)
+
+        active_rows = [
+            index for index, position in enumerate(positions)
+            if position is not None
+        ]
+        if not active_rows:
+            return [[] for _ in texts]
+        device = _model_device(self.mlm_model)
+        masked_ids = input_ids[active_rows].to(device)
+        masked_attention = attention_mask[active_rows].to(device)
+        for output_row, source_row in enumerate(active_rows):
+            masked_ids[output_row, positions[source_row]] = self.mask_token_id
+        logits = self.mlm_model(
+            input_ids=masked_ids,
+            attention_mask=masked_attention,
+        ).logits
+
+        raw_groups: List[List[Dict[str, Any]]] = [[] for _ in texts]
+        text_groups: List[List[str]] = [[] for _ in texts]
+        for output_row, source_row in enumerate(active_rows):
+            position = int(positions[source_row])
+            original_row = input_ids[source_row]
+            old_id = int(original_row[position].item())
+            candidate_ids = torch.topk(
+                logits[output_row, position],
+                k=self.top_k_per_pos,
+            ).indices.tolist()
+            valid_length = int(attention_mask[source_row].sum().item())
+            seen = {texts[source_row]}
+            for new_id in candidate_ids:
+                if new_id == old_id or new_id in self.mlm_special_ids:
+                    continue
+                modified = original_row[:valid_length].clone()
+                modified[position] = int(new_id)
+                candidate_text = self.mlm_tokenizer.decode(
+                    modified.tolist(),
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                ).strip()
+                if not candidate_text or candidate_text in seen:
+                    continue
+                seen.add(candidate_text)
+                raw_groups[source_row].append(
+                    {
+                        "mlm_position": position,
+                        "mlm_old_id": old_id,
+                        "mlm_new_id": int(new_id),
+                    }
+                )
+                text_groups[source_row].append(candidate_text)
+
+        filtered_groups = self.semantic_filter.filter_groups(texts, text_groups)
+        output: List[List[Dict[str, Any]]] = []
+        for raw_group, text_group, filtered in zip(
+            raw_groups,
+            text_groups,
+            filtered_groups,
+        ):
+            similarity_by_text = dict(filtered)
+            output.append(
+                [
+                    {
+                        **metadata,
+                        "cosine_similarity": similarity_by_text[candidate_text],
+                    }
+                    for metadata, candidate_text in zip(raw_group, text_group)
+                    if candidate_text in similarity_by_text
+                ][: self.max_candidates]
+            )
+        return output
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class CachedMLMTrainingCandidateGenerator:
+    """Decode precomputed MLM replacement specs without loading GPU models."""
+
+    def __init__(self, cache_path: str | Path):
+        self.cache_path = Path(cache_path)
+        if not self.cache_path.is_file():
+            raise FileNotFoundError(
+                f"MLM training candidate cache not found: {self.cache_path}"
+            )
+        self.records: Dict[str, Dict[str, Any]] = {}
+        model_name: Optional[str] = None
+        similarity_model_name: Optional[str] = None
+        minimum_similarity: Optional[float] = None
+        position_seed: Optional[int] = None
+        with self.cache_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                self.records[record["text_sha256"]] = record
+                model_name = model_name or record.get("mlm_model_name")
+                similarity_model_name = similarity_model_name or record.get(
+                    "similarity_model_name"
+                )
+                if minimum_similarity is None:
+                    minimum_similarity = record.get("minimum_cosine_similarity")
+                if position_seed is None:
+                    position_seed = record.get("position_seed")
+        if not self.records or not model_name:
+            raise ValueError(f"Empty or invalid MLM cache: {self.cache_path}")
+        self.mlm_model_name = model_name
+        self.similarity_model_name = similarity_model_name
+        self.minimum_similarity = minimum_similarity
+        self.position_seed = position_seed
+        self.mlm_tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    def has_text(self, text: str) -> bool:
+        return _text_sha256(text) in self.records
+
+    def generate(
+        self,
+        text: str,
+        *,
+        reference_text: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        del reference_text
+        record = self.records.get(_text_sha256(text))
+        if record is None:
+            return []
+        ids = self.mlm_tokenizer(
+            text,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=int(record["mlm_max_length"]),
+        )["input_ids"]
+        if hasattr(ids, "tolist"):
+            ids = ids.tolist()
+        candidates: List[Dict[str, Any]] = []
+        for replacement in record["replacements"]:
+            position = int(replacement["mlm_position"])
+            if position >= len(ids):
+                continue
+            if int(ids[position]) != int(replacement["mlm_old_id"]):
+                continue
+            modified = list(ids)
+            modified[position] = int(replacement["mlm_new_id"])
+            candidate_text = self.mlm_tokenizer.decode(
+                modified,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            ).strip()
+            if not candidate_text:
+                continue
+            candidates.append({"text": candidate_text, **replacement})
+        return candidates
 
 
 class MLMGuidedAttack:
