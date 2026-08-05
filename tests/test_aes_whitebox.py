@@ -30,6 +30,7 @@ from text_scoring_adv_training.training.aes_trainer import (
     build_adamw_parameter_groups,
     one_sided_score_inflation_loss,
     quality_preserving_mlm_loss,
+    run_mlm_guided_one_row,
     run_rudimentary_one_row,
     tensor_to_float_numpy,
 )
@@ -286,6 +287,10 @@ class AESMLMGuidedAttackTest(unittest.TestCase):
             "text_scoring_adv_training.evaluation.aes.attacks."
             "mlm_guided.build_replacement_map",
             return_value={1: [77]},
+        ), patch(
+            "text_scoring_adv_training.evaluation.aes.attacks."
+            "mlm_guided.random.sample",
+            return_value=[1],
         ):
             candidates = generator.generate(
                 "original essay",
@@ -350,6 +355,51 @@ class AESMLMGuidedAttackTest(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertIn("0-77-11-0", candidates[0]["text"])
+
+    def test_training_candidate_scoring_is_memory_bounded(self):
+        class _Generator:
+            def generate(self, _text, **_kwargs):
+                return [
+                    {"text": f"candidate-{index}"}
+                    for index in range(16)
+                ]
+
+        class _Tokenizer:
+            def _ids(self, text):
+                return [0] if text == "original" else [int(text.split("-")[1]) + 1]
+
+            def __call__(self, texts, return_tensors=None, **_kwargs):
+                if isinstance(texts, str):
+                    return {"input_ids": self._ids(texts)}
+                rows = [self._ids(text) for text in texts]
+                return {
+                    "input_ids": torch.tensor(rows),
+                    "attention_mask": torch.ones(len(rows), 1, dtype=torch.long),
+                }
+
+        class _Model(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.batch_sizes = []
+
+            def forward(self, input_ids, attention_mask):
+                del attention_mask
+                self.batch_sizes.append(input_ids.size(0))
+                return SimpleNamespace(logits=input_ids.float())
+
+        model = _Model()
+        scorer = SimpleNamespace(tokenizer=_Tokenizer(), model=model)
+        selected = run_mlm_guided_one_row(
+            "original",
+            _Generator(),
+            scorer,
+            max_length=1024,
+            device="cpu",
+            candidate_scoring_batch_size=8,
+        )
+
+        self.assertEqual(selected, "candidate-15")
+        self.assertEqual(model.batch_sizes, [8, 8, 3])
 
 
 class AESWhiteboxTrainingTest(unittest.TestCase):

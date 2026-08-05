@@ -222,6 +222,12 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         default=1e-6,
     )
     parser.add_argument(
+        "--mlm-candidate-scoring-batch-size",
+        type=int,
+        default=8,
+        help="DeBERTa batch size used to score the 16 cached candidates.",
+    )
+    parser.add_argument(
         "--mlm-model-name",
         default="answerdotai/ModernBERT-large",
     )
@@ -329,6 +335,9 @@ def build_config(
         "mlm_top_k_per_pos": args.mlm_top_k_per_pos,
         "mlm_tolerance": args.mlm_tolerance,
         "mlm_improvement_tolerance": args.mlm_improvement_tolerance,
+        "mlm_candidate_scoring_batch_size": (
+            args.mlm_candidate_scoring_batch_size
+        ),
         "mlm_model_name": args.mlm_model_name,
         "mlm_similarity_model_name": args.mlm_similarity_model_name,
         "mlm_minimum_cosine_similarity": (
@@ -356,10 +365,15 @@ def validate_config(config: dict[str, Any]) -> None:
         "mlm_n_sample_pos",
         "mlm_top_k_per_pos",
         "mlm_max_length",
+        "mlm_candidate_scoring_batch_size",
     )
     for field in positive_integer_fields:
         if config[field] <= 0:
             raise ValueError(f"{field} must be greater than zero")
+    if config["mlm_candidate_scoring_batch_size"] < 2:
+        raise ValueError(
+            "mlm_candidate_scoring_batch_size must be at least two"
+        )
     if config["learning_rate"] <= 0:
         raise ValueError("learning_rate must be greater than zero")
     if config["weight_decay"] < 0:

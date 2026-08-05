@@ -94,6 +94,7 @@ class AESAdversarialConfig:
     mlm_top_k_per_pos: int = 16
     mlm_tolerance: float = 0.05
     mlm_improvement_tolerance: float = 1e-6
+    mlm_candidate_scoring_batch_size: int = 8
     mlm_model_name: str = "answerdotai/ModernBERT-large"
     mlm_similarity_model_name: str = (
         "sentence-transformers/all-MiniLM-L6-v2"
@@ -500,10 +501,13 @@ def run_mlm_guided_one_row(
     device: str,
     autocast_dtype: Optional[torch.dtype] = None,
     improvement_tolerance: float = 1e-6,
+    candidate_scoring_batch_size: int = 8,
 ) -> Optional[str]:
     """Select the best semantic MLM candidate using true victim scores."""
     if improvement_tolerance < 0:
         raise ValueError("improvement_tolerance must be non-negative")
+    if candidate_scoring_batch_size < 2:
+        raise ValueError("candidate_scoring_batch_size must be at least two")
     proposed = candidate_generator.generate(text, reference_text=text)
     if not proposed:
         return None
@@ -537,34 +541,45 @@ def run_mlm_guided_one_row(
     if not candidates:
         return None
 
-    encoded = tokenizer(
-        [text, *candidates],
-        return_tensors="pt",
-        truncation=True,
-        max_length=max_length,
-        padding=True,
-    )
     model = scorer.model
     was_training = model.training
     try:
         model.eval()
-        autocast_context = (
-            torch.autocast(device_type="cuda", dtype=autocast_dtype)
-            if autocast_dtype is not None and str(device).startswith("cuda")
-            else nullcontext()
-        )
-        with torch.no_grad(), autocast_context:
-            scores = model(
-                input_ids=encoded["input_ids"].to(device),
-                attention_mask=encoded["attention_mask"].to(device),
-            ).logits.squeeze(-1)
-        best_index = int(torch.argmax(scores[1:]).item()) + 1
-        if (
-            float(scores[best_index].item())
-            <= float(scores[0].item()) + improvement_tolerance
-        ):
+        best_candidate_index: Optional[int] = None
+        best_delta = float("-inf")
+        candidates_per_chunk = candidate_scoring_batch_size - 1
+        for start in range(0, len(candidates), candidates_per_chunk):
+            candidate_chunk = candidates[start : start + candidates_per_chunk]
+            # Repeat the original in every chunk so dynamic-padding roundoff
+            # cancels when candidate deltas are compared across chunks.
+            chunk = [text, *candidate_chunk]
+            encoded = tokenizer(
+                chunk,
+                return_tensors="pt",
+                truncation=True,
+                max_length=max_length,
+                padding=True,
+            )
+            autocast_context = (
+                torch.autocast(device_type="cuda", dtype=autocast_dtype)
+                if autocast_dtype is not None and str(device).startswith("cuda")
+                else nullcontext()
+            )
+            with torch.no_grad(), autocast_context:
+                chunk_scores = model(
+                    input_ids=encoded["input_ids"].to(device),
+                    attention_mask=encoded["attention_mask"].to(device),
+                ).logits.squeeze(-1)
+            chunk_values = chunk_scores.float().cpu().tolist()
+            original_score = chunk_values[0]
+            for offset, candidate_score in enumerate(chunk_values[1:]):
+                delta = candidate_score - original_score
+                if delta > best_delta:
+                    best_delta = delta
+                    best_candidate_index = start + offset
+        if best_candidate_index is None or best_delta <= improvement_tolerance:
             return None
-        return candidates[best_index - 1]
+        return candidates[best_candidate_index]
     finally:
         model.train(was_training)
 
@@ -851,6 +866,9 @@ class AESAdversarialTrainer:
                     device=self.device,
                     autocast_dtype=self.autocast_dtype,
                     improvement_tolerance=cfg.mlm_improvement_tolerance,
+                    candidate_scoring_batch_size=(
+                        cfg.mlm_candidate_scoring_batch_size
+                    ),
                 )
                 if perturbed_text is not None:
                     adversarial_texts[index] = perturbed_text

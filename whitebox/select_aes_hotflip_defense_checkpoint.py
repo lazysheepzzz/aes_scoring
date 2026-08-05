@@ -428,7 +428,7 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
     defense_names = {
         "hotflip": "aes_hotflip_defense_seed42",
         "rudimentary": "aes_rudimentary_defense_v2_seed42",
-        "mlm_guided": "aes_mlm_guided_defense_cached_seed42",
+        "mlm_guided": "aes_mlm_guided_defense_batched_seed42",
     }
     selection_names = {
         "hotflip": "aes_hotflip_checkpoint_selection_seed42",

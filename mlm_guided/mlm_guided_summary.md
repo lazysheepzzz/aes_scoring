@@ -82,5 +82,10 @@ python .\mlm_guided\prepare_aes_mlm_training_candidates.py `
 ```powershell
 python .\mlm_guided\run_aes_mlm_guided_adv_training.py `
   --seed 42 `
-  --output-dir .\outputs\aes_mlm_guided_defense_cached_seed42
+  --output-dir .\outputs\aes_mlm_guided_defense_batched_seed42
 ```
+
+训练时全部 16 个候选仍会被当前 DeBERTa 评分，但按最多 8 条文本的小批次执行，
+并在每个小批次重复原文、按相对增分选优，避免动态 padding 误差及 24GB 显存
+被 batch=17 的长序列前向占满。若仍然显存不足，可添加
+`--mlm-candidate-scoring-batch-size 4`；这只改变推理分块，不改变候选或损失。
