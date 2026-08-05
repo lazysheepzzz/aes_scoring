@@ -27,7 +27,7 @@ from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ENTRYPOINT = REPO_ROOT / "whitebox" / "evaluate_aes_checkpoint.py"
-SUPPORTED_ATTACKS = ("hotflip", "rudimentary")
+SUPPORTED_ATTACKS = ("hotflip", "rudimentary", "mlm_guided")
 
 
 def _sha256(path: Path) -> str:
@@ -337,6 +337,26 @@ def _base_evaluation_command(
     ]
     if args.no_progress:
         command.append("--no-progress")
+    if args.online:
+        command.append("--online")
+    command.extend(
+        [
+            "--hf-home",
+            str(args.hf_home.resolve()),
+            "--mlm-max-token-edit-rate",
+            str(args.mlm_max_token_edit_rate),
+            "--mlm-model-name",
+            args.mlm_model_name,
+            "--similarity-model-name",
+            args.similarity_model_name,
+            "--minimum-cosine-similarity",
+            str(args.minimum_cosine_similarity),
+            "--mlm-max-length",
+            str(args.mlm_max_length),
+            "--mlm-dtype",
+            args.mlm_dtype,
+        ]
+    )
     return command
 
 
@@ -405,16 +425,18 @@ def _evaluate_subset_if_needed(
 def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
     if attack not in SUPPORTED_ATTACKS:
         raise ValueError(f"Unsupported checkpoint-selection attack: {attack}")
-    defense_name = (
-        "aes_hotflip_defense_seed42"
-        if attack == "hotflip"
-        else "aes_rudimentary_defense_v2_seed42"
-    )
-    selection_name = (
-        "aes_hotflip_checkpoint_selection_seed42"
-        if attack == "hotflip"
-        else "aes_rudimentary_defense_v2_checkpoint_selection_seed42"
-    )
+    defense_names = {
+        "hotflip": "aes_hotflip_defense_seed42",
+        "rudimentary": "aes_rudimentary_defense_v2_seed42",
+        "mlm_guided": "aes_mlm_guided_defense_seed42",
+    }
+    selection_names = {
+        "hotflip": "aes_hotflip_checkpoint_selection_seed42",
+        "rudimentary": "aes_rudimentary_defense_v2_checkpoint_selection_seed42",
+        "mlm_guided": "aes_mlm_guided_checkpoint_selection_seed42",
+    }
+    defense_name = defense_names[attack]
+    selection_name = selection_names[attack]
     parser = argparse.ArgumentParser(
         description=(
             f"Select the {attack} defense by clean QWK gate and "
@@ -481,6 +503,29 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
     parser.add_argument("--top-k-per-pos", type=int, default=2)
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
+    parser.add_argument("--mlm-max-token-edit-rate", type=float, default=0.05)
+    parser.add_argument("--mlm-model-name", default="answerdotai/ModernBERT-large")
+    parser.add_argument(
+        "--similarity-model-name",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+    )
+    parser.add_argument("--minimum-cosine-similarity", type=float, default=0.90)
+    parser.add_argument("--mlm-max-length", type=int, default=8192)
+    parser.add_argument(
+        "--mlm-dtype",
+        choices=("float32", "bfloat16"),
+        default="bfloat16",
+    )
+    parser.add_argument(
+        "--hf-home",
+        type=Path,
+        default=REPO_ROOT / ".cache" / "huggingface",
+    )
+    parser.add_argument(
+        "--online",
+        action="store_true",
+        help="Allow model downloads; use once to populate the MLM caches.",
+    )
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -526,6 +571,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("success_threshold must be non-negative")
     if not 0 < args.max_token_edit_rate <= 1:
         raise ValueError("max_token_edit_rate must be in (0, 1]")
+    if not 0 < args.mlm_max_token_edit_rate <= 1:
+        raise ValueError("mlm_max_token_edit_rate must be in (0, 1]")
+    if not -1 <= args.minimum_cosine_similarity <= 1:
+        raise ValueError("minimum_cosine_similarity must be in [-1, 1]")
+    if args.mlm_max_length <= 0:
+        raise ValueError("mlm_max_length must be greater than zero")
 
 
 def main(attack: str = "hotflip") -> int:
@@ -668,6 +719,26 @@ def main(attack: str = "hotflip") -> int:
             "selection_attack": args.attack,
             "selection_steps": args.selection_steps,
             "success_threshold": args.success_threshold,
+            "max_token_edit_rate": (
+                args.mlm_max_token_edit_rate
+                if args.attack == "mlm_guided"
+                else args.max_token_edit_rate
+            ),
+            "mlm_model_name": (
+                args.mlm_model_name
+                if args.attack == "mlm_guided"
+                else None
+            ),
+            "similarity_model_name": (
+                args.similarity_model_name
+                if args.attack == "mlm_guided"
+                else None
+            ),
+            "minimum_cosine_similarity": (
+                args.minimum_cosine_similarity
+                if args.attack == "mlm_guided"
+                else None
+            ),
         },
         "selected_checkpoint": selected,
         "equivalent_duplicate_names": equivalent_names,

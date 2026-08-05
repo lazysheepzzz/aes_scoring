@@ -28,6 +28,7 @@ python -m pip install -e .
 
 deberta_checkpoints/fold0_best
 answerdotai/ModernBERT-large
+sentence-transformers/all-MiniLM-L6-v2
 
 环境变量：
 

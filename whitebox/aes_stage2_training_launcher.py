@@ -31,10 +31,12 @@ ON_SERVER = SERVER_ROOT.exists()
 CLEAN_CONTINUATION = "clean_continuation"
 HOTFLIP_DEFENSE = "hotflip_defense"
 RUDIMENTARY_DEFENSE = "rudimentary_defense"
+MLM_GUIDED_DEFENSE = "mlm_guided_defense"
 TRAINING_MODES = (
     CLEAN_CONTINUATION,
     HOTFLIP_DEFENSE,
     RUDIMENTARY_DEFENSE,
+    MLM_GUIDED_DEFENSE,
 )
 
 
@@ -92,9 +94,14 @@ def _default_output_dir(training_mode: str) -> Path:
             "/root/autodl-tmp/aes_hotflip_defense",
             REPO_ROOT / "outputs" / "aes_hotflip_defense",
         )
+    if training_mode == RUDIMENTARY_DEFENSE:
+        return _default_path(
+            "/root/autodl-tmp/aes_rudimentary_defense_v2",
+            REPO_ROOT / "outputs" / "aes_rudimentary_defense_v2",
+        )
     return _default_path(
-        "/root/autodl-tmp/aes_rudimentary_defense_v2",
-        REPO_ROOT / "outputs" / "aes_rudimentary_defense_v2",
+        "/root/autodl-tmp/aes_mlm_guided_defense",
+        REPO_ROOT / "outputs" / "aes_mlm_guided_defense",
     )
 
 
@@ -105,6 +112,7 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         CLEAN_CONTINUATION: "C0 clean-continuation",
         HOTFLIP_DEFENSE: "D_HOTFLIP adversarial",
         RUDIMENTARY_DEFENSE: "D_RUDIMENTARY adversarial",
+        MLM_GUIDED_DEFENSE: "D_MLM adversarial",
     }
     display_name = display_names[training_mode]
     parser = argparse.ArgumentParser(
@@ -201,6 +209,33 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         default=1e-6,
     )
 
+    # MLM-guided quality-preserving defense parameters from plan.md.
+    parser.add_argument("--mlm-weight", type=float, default=1.0)
+    parser.add_argument("--mlm-fraction", type=float, default=0.5)
+    parser.add_argument("--mlm-candidates", type=int, default=16)
+    parser.add_argument("--mlm-n-sample-pos", type=int, default=8)
+    parser.add_argument("--mlm-top-k-per-pos", type=int, default=2)
+    parser.add_argument("--mlm-tolerance", type=float, default=0.05)
+    parser.add_argument(
+        "--mlm-improvement-tolerance",
+        type=float,
+        default=1e-6,
+    )
+    parser.add_argument(
+        "--mlm-model-name",
+        default="answerdotai/ModernBERT-large",
+    )
+    parser.add_argument(
+        "--mlm-similarity-model-name",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+    )
+    parser.add_argument(
+        "--mlm-minimum-cosine-similarity",
+        type=float,
+        default=0.90,
+    )
+    parser.add_argument("--mlm-max-length", type=int, default=8192)
+
     parser.add_argument(
         "--hf-home",
         type=Path,
@@ -256,6 +291,7 @@ def build_config(
         "use_rudimentary_edits": (
             training_mode == RUDIMENTARY_DEFENSE
         ),
+        "use_mlm_guided": training_mode == MLM_GUIDED_DEFENSE,
         "hotflip_weight": args.hotflip_weight,
         "hotflip_n_sample_pos": args.hotflip_n_sample_pos,
         "hotflip_top_k_per_pos": args.hotflip_top_k_per_pos,
@@ -275,6 +311,19 @@ def build_config(
         "rudimentary_improvement_tolerance": (
             args.rudimentary_improvement_tolerance
         ),
+        "mlm_weight": args.mlm_weight,
+        "mlm_fraction": args.mlm_fraction,
+        "mlm_candidates": args.mlm_candidates,
+        "mlm_n_sample_pos": args.mlm_n_sample_pos,
+        "mlm_top_k_per_pos": args.mlm_top_k_per_pos,
+        "mlm_tolerance": args.mlm_tolerance,
+        "mlm_improvement_tolerance": args.mlm_improvement_tolerance,
+        "mlm_model_name": args.mlm_model_name,
+        "mlm_similarity_model_name": args.mlm_similarity_model_name,
+        "mlm_minimum_cosine_similarity": (
+            args.mlm_minimum_cosine_similarity
+        ),
+        "mlm_max_length": args.mlm_max_length,
     }
 
 
@@ -291,6 +340,10 @@ def validate_config(config: dict[str, Any]) -> None:
         "hotflip_max_candidates",
         "rudimentary_candidates",
         "rudimentary_edits_per_candidate",
+        "mlm_candidates",
+        "mlm_n_sample_pos",
+        "mlm_top_k_per_pos",
+        "mlm_max_length",
     )
     for field in positive_integer_fields:
         if config[field] <= 0:
@@ -305,6 +358,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("hotflip_fraction must be between zero and one")
     if not 0.0 <= config["rudimentary_fraction"] <= 1.0:
         raise ValueError("rudimentary_fraction must be between zero and one")
+    if not 0.0 <= config["mlm_fraction"] <= 1.0:
+        raise ValueError("mlm_fraction must be between zero and one")
     if config["clean_loss_weight"] <= 0:
         raise ValueError("clean_loss_weight must be greater than zero")
     if config["hotflip_weight"] < 0:
@@ -323,6 +378,14 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError(
             "rudimentary_improvement_tolerance must be non-negative"
         )
+    if config["mlm_weight"] < 0:
+        raise ValueError("mlm_weight must be non-negative")
+    if config["mlm_tolerance"] < 0:
+        raise ValueError("mlm_tolerance must be non-negative")
+    if config["mlm_improvement_tolerance"] < 0:
+        raise ValueError("mlm_improvement_tolerance must be non-negative")
+    if not -1.0 <= config["mlm_minimum_cosine_similarity"] <= 1.0:
+        raise ValueError("mlm_minimum_cosine_similarity must be in [-1, 1]")
     if not 0.0 < config["adam_beta1"] < 1.0:
         raise ValueError("adam_beta1 must be in (0, 1)")
     if not 0.0 < config["adam_beta2"] < 1.0:

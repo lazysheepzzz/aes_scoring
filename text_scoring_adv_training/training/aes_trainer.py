@@ -29,6 +29,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
+from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import (
+    MLMGuidedCandidateGenerator,
+)
 from text_scoring_adv_training.evaluation.robustness_tests.common.hotflip import (
     _sample_positions,
     _topk_per_position,
@@ -83,6 +86,20 @@ class AESAdversarialConfig:
     rudimentary_tolerance: float = 0.0
     rudimentary_relative_loss_power: float = 1.0
     rudimentary_improvement_tolerance: float = 1e-6
+    use_mlm_guided: bool = False
+    mlm_weight: float = 1.0
+    mlm_fraction: float = 0.5
+    mlm_candidates: int = 16
+    mlm_n_sample_pos: int = 8
+    mlm_top_k_per_pos: int = 2
+    mlm_tolerance: float = 0.05
+    mlm_improvement_tolerance: float = 1e-6
+    mlm_model_name: str = "answerdotai/ModernBERT-large"
+    mlm_similarity_model_name: str = (
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
+    mlm_minimum_cosine_similarity: float = 0.90
+    mlm_max_length: int = 8192
 
     def __post_init__(self):
         if self.hotflip_margin is not None:
@@ -91,12 +108,14 @@ class AESAdversarialConfig:
             "clean_continuation",
             "hotflip_defense",
             "rudimentary_defense",
+            "mlm_guided_defense",
         ):
             raise ValueError(f"Unknown training_mode: {self.training_mode}")
         if self.precision not in ("bfloat16", "float32"):
             raise ValueError(f"Unsupported precision: {self.precision}")
         expected_hotflip = self.training_mode == "hotflip_defense"
         expected_rudimentary = self.training_mode == "rudimentary_defense"
+        expected_mlm = self.training_mode == "mlm_guided_defense"
         if self.use_hotflip_swaps != expected_hotflip:
             raise ValueError(
                 "training_mode and use_hotflip_swaps disagree: "
@@ -106,6 +125,11 @@ class AESAdversarialConfig:
             raise ValueError(
                 "training_mode and use_rudimentary_edits disagree: "
                 f"{self.training_mode=}, {self.use_rudimentary_edits=}"
+            )
+        if self.use_mlm_guided != expected_mlm:
+            raise ValueError(
+                "training_mode and use_mlm_guided disagree: "
+                f"{self.training_mode=}, {self.use_mlm_guided=}"
             )
 
 
@@ -181,6 +205,26 @@ def one_sided_score_inflation_loss(
         adversarial_scores - clean_scores.detach() - tolerance
     ).pow(relative_loss_power)
     return gold_excess.mean() + relative_weight * relative_excess.mean()
+
+
+def quality_preserving_mlm_loss(
+    clean_scores: torch.Tensor,
+    adversarial_scores: torch.Tensor,
+    target_scores: torch.Tensor,
+    *,
+    tolerance: float = 0.05,
+    relative_weight: float = 0.5,
+) -> torch.Tensor:
+    """Plan-defined MLM loss: label fidelity plus one-sided invariance."""
+    label_fidelity = F.smooth_l1_loss(
+        adversarial_scores,
+        target_scores,
+        beta=0.1,
+    )
+    relative_excess = torch.relu(
+        adversarial_scores - clean_scores.detach() - tolerance
+    ).pow(2)
+    return label_fidelity + relative_weight * relative_excess.mean()
 
 
 def build_adamw_parameter_groups(
@@ -444,6 +488,84 @@ def run_rudimentary_one_row(
         model.train(was_training)
 
 
+def run_mlm_guided_one_row(
+    text: str,
+    candidate_generator: MLMGuidedCandidateGenerator,
+    scorer: AESScorer,
+    *,
+    max_length: int,
+    device: str,
+    autocast_dtype: Optional[torch.dtype] = None,
+    improvement_tolerance: float = 1e-6,
+) -> Optional[str]:
+    """Select the best semantic MLM candidate using true victim scores."""
+    if improvement_tolerance < 0:
+        raise ValueError("improvement_tolerance must be non-negative")
+    proposed = candidate_generator.generate(text, reference_text=text)
+    if not proposed:
+        return None
+
+    tokenizer = scorer.tokenizer
+    original_ids = tokenizer(
+        text,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=max_length,
+    )["input_ids"]
+    if hasattr(original_ids, "tolist"):
+        original_ids = original_ids.tolist()
+    seen_token_sequences = {tuple(int(token_id) for token_id in original_ids)}
+    candidates: List[str] = []
+    for candidate in proposed:
+        candidate_text = candidate["text"]
+        candidate_ids = tokenizer(
+            candidate_text,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=max_length,
+        )["input_ids"]
+        if hasattr(candidate_ids, "tolist"):
+            candidate_ids = candidate_ids.tolist()
+        token_sequence = tuple(int(token_id) for token_id in candidate_ids)
+        if token_sequence in seen_token_sequences:
+            continue
+        seen_token_sequences.add(token_sequence)
+        candidates.append(candidate_text)
+    if not candidates:
+        return None
+
+    encoded = tokenizer(
+        [text, *candidates],
+        return_tensors="pt",
+        truncation=True,
+        max_length=max_length,
+        padding=True,
+    )
+    model = scorer.model
+    was_training = model.training
+    try:
+        model.eval()
+        autocast_context = (
+            torch.autocast(device_type="cuda", dtype=autocast_dtype)
+            if autocast_dtype is not None and str(device).startswith("cuda")
+            else nullcontext()
+        )
+        with torch.no_grad(), autocast_context:
+            scores = model(
+                input_ids=encoded["input_ids"].to(device),
+                attention_mask=encoded["attention_mask"].to(device),
+            ).logits.squeeze(-1)
+        best_index = int(torch.argmax(scores[1:]).item()) + 1
+        if (
+            float(scores[best_index].item())
+            <= float(scores[0].item()) + improvement_tolerance
+        ):
+            return None
+        return candidates[best_index - 1]
+    finally:
+        model.train(was_training)
+
+
 # ---------------------------------------------------------------------------
 # Trainer
 # ---------------------------------------------------------------------------
@@ -472,6 +594,29 @@ class AESAdversarialTrainer:
         self.scorer = AESScorer(config.checkpoint_path, device=self.device, dtype=torch.float32)
         self.tokenizer = self.scorer.tokenizer
         self.scorer.model.train()
+
+        self.mlm_candidate_generator = None
+        if config.use_mlm_guided:
+            print(
+                f"Loading MLM candidate model {config.mlm_model_name} and "
+                f"similarity model {config.mlm_similarity_model_name}...",
+                flush=True,
+            )
+            self.mlm_candidate_generator = MLMGuidedCandidateGenerator(
+                mlm_model_name=config.mlm_model_name,
+                similarity_model_name=config.mlm_similarity_model_name,
+                device=self.device,
+                dtype=(
+                    torch.bfloat16
+                    if self.device == "cuda"
+                    else torch.float32
+                ),
+                n_sample_pos=config.mlm_n_sample_pos,
+                top_k_per_pos=config.mlm_top_k_per_pos,
+                max_candidates=config.mlm_candidates,
+                minimum_similarity=config.mlm_minimum_cosine_similarity,
+                mlm_max_length=config.mlm_max_length,
+            )
 
         specials = set(self.tokenizer.all_special_ids)
         if self.tokenizer.pad_token_id is not None:
@@ -543,6 +688,8 @@ class AESAdversarialTrainer:
             fraction = cfg.hotflip_fraction
         elif cfg.use_rudimentary_edits:
             fraction = cfg.rudimentary_fraction
+        elif cfg.use_mlm_guided:
+            fraction = cfg.mlm_fraction
         else:
             return [False] * batch_size
         n = int(batch_size * fraction)
@@ -668,6 +815,43 @@ class AESAdversarialTrainer:
                     ).logits.squeeze(-1)
             else:
                 adv_logits = clean_logits.detach()
+        elif cfg.use_mlm_guided and adversarial_indices:
+            if self.mlm_candidate_generator is None:
+                raise RuntimeError("MLM candidate generator was not initialized")
+            adversarial_texts = list(b["texts"])
+            changed_indices = []
+            for index in adversarial_indices:
+                perturbed_text = run_mlm_guided_one_row(
+                    b["texts"][index],
+                    self.mlm_candidate_generator,
+                    self.scorer,
+                    max_length=cfg.max_length,
+                    device=self.device,
+                    autocast_dtype=self.autocast_dtype,
+                    improvement_tolerance=cfg.mlm_improvement_tolerance,
+                )
+                if perturbed_text is not None:
+                    adversarial_texts[index] = perturbed_text
+                    changed_indices.append(index)
+
+            loss_indices = changed_indices
+            if changed_indices:
+                adversarial_batch = self.tokenizer(
+                    adversarial_texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=cfg.max_length,
+                    padding=True,
+                )
+                with self._autocast_context():
+                    adv_logits = self.scorer.model(
+                        input_ids=adversarial_batch["input_ids"].to(self.device),
+                        attention_mask=adversarial_batch["attention_mask"].to(
+                            self.device
+                        ),
+                    ).logits.squeeze(-1)
+            else:
+                adv_logits = clean_logits.detach()
         else:
             adv_logits = clean_logits.detach()
 
@@ -675,7 +859,15 @@ class AESAdversarialTrainer:
         base_loss = F.mse_loss(clean_logits.float(), labels.float())
 
         if loss_indices:
-            if cfg.use_hotflip_swaps:
+            if cfg.use_mlm_guided:
+                attack_weight = cfg.mlm_weight
+                adversarial_loss = quality_preserving_mlm_loss(
+                    clean_logits[loss_indices].float(),
+                    adv_logits[loss_indices].float(),
+                    labels[loss_indices].float(),
+                    tolerance=cfg.mlm_tolerance,
+                )
+            elif cfg.use_hotflip_swaps:
                 attack_weight = cfg.hotflip_weight
                 attack_tolerance = cfg.hotflip_tolerance
                 relative_loss_power = 2.0
@@ -685,13 +877,14 @@ class AESAdversarialTrainer:
                 relative_loss_power = (
                     cfg.rudimentary_relative_loss_power
                 )
-            adversarial_loss = one_sided_score_inflation_loss(
-                clean_logits[loss_indices].float(),
-                adv_logits[loss_indices].float(),
-                labels[loss_indices].float(),
-                tolerance=attack_tolerance,
-                relative_loss_power=relative_loss_power,
-            )
+            if not cfg.use_mlm_guided:
+                adversarial_loss = one_sided_score_inflation_loss(
+                    clean_logits[loss_indices].float(),
+                    adv_logits[loss_indices].float(),
+                    labels[loss_indices].float(),
+                    tolerance=attack_tolerance,
+                    relative_loss_power=relative_loss_power,
+                )
             total_loss = (
                 cfg.clean_loss_weight * base_loss
                 + attack_weight * adversarial_loss

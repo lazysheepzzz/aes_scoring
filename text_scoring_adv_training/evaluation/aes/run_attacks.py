@@ -102,6 +102,12 @@ def build_attack(
     max_candidates_per_step: int = 16,
     success_threshold: float = 0.1,
     max_token_edit_rate: float = 0.1,
+    mlm_max_token_edit_rate: float = 0.05,
+    mlm_model_name: str = "answerdotai/ModernBERT-large",
+    similarity_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    minimum_cosine_similarity: float = 0.90,
+    mlm_max_length: int = 8192,
+    mlm_dtype="bfloat16",
 ):
     """Instantiate an attack using the unified AES evaluation protocol."""
     if attack_name == "rudimentary":
@@ -128,7 +134,29 @@ def build_attack(
             max_token_edit_rate=max_token_edit_rate,
         )
     elif attack_name == "mlm_guided":
-        return MLMGuidedAttack(scorer, sim_threshold=0.9, n_variants=3)
+        import torch
+
+        dtype = (
+            torch.bfloat16
+            if mlm_dtype == "bfloat16" and str(device).startswith("cuda")
+            else torch.float32
+        )
+        return MLMGuidedAttack(
+            scorer,
+            n_steps=n_steps,
+            beam_size=beam_size,
+            n_sample_pos=n_sample_pos,
+            top_k_per_pos=top_k_per_pos,
+            max_candidates_per_step=max_candidates_per_step,
+            batch_size=32,
+            threshold=success_threshold,
+            max_token_edit_rate=mlm_max_token_edit_rate,
+            minimum_similarity=minimum_cosine_similarity,
+            mlm_model_name=mlm_model_name,
+            similarity_model_name=similarity_model_name,
+            mlm_max_length=mlm_max_length,
+            dtype=dtype,
+        )
     else:
         raise ValueError(f"Unknown attack: {attack_name!r}")
 
@@ -194,6 +222,12 @@ def run(args):
             max_candidates_per_step=args.max_candidates_per_step,
             success_threshold=args.success_threshold,
             max_token_edit_rate=args.max_token_edit_rate,
+            mlm_max_token_edit_rate=args.mlm_max_token_edit_rate,
+            mlm_model_name=args.mlm_model_name,
+            similarity_model_name=args.similarity_model_name,
+            minimum_cosine_similarity=args.minimum_cosine_similarity,
+            mlm_max_length=args.mlm_max_length,
+            mlm_dtype=args.mlm_dtype,
         )
 
         def attack_fn(text):
@@ -258,6 +292,22 @@ def run(args):
             "top_k_per_pos": args.top_k_per_pos,
             "success_threshold": args.success_threshold,
         },
+        "mlm_guided": {
+            **shared_attack_parameters,
+            "max_token_edit_rate": args.mlm_max_token_edit_rate,
+            "n_sample_pos": args.n_sample_pos,
+            "top_k_per_pos": args.top_k_per_pos,
+            "success_threshold": args.success_threshold,
+            "mlm_model_name": args.mlm_model_name,
+            "mlm_dtype": args.mlm_dtype,
+            "mlm_max_length": args.mlm_max_length,
+            "similarity_model_name": args.similarity_model_name,
+            "minimum_cosine_similarity": args.minimum_cosine_similarity,
+            "tokenizer_boundary": (
+                "ModernBERT IDs are decoded to text; candidate text is "
+                "independently re-encoded by the DeBERTa victim"
+            ),
+        },
     }
     manifest = {
         "victim": str(args.victim),
@@ -314,6 +364,31 @@ def main():
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
     parser.add_argument(
+        "--mlm-max-token-edit-rate",
+        type=float,
+        default=0.05,
+        help="Victim-token edit rate used only by MLM-guided.",
+    )
+    parser.add_argument(
+        "--mlm-model-name",
+        default="answerdotai/ModernBERT-large",
+    )
+    parser.add_argument(
+        "--similarity-model-name",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+    )
+    parser.add_argument(
+        "--minimum-cosine-similarity",
+        type=float,
+        default=0.90,
+    )
+    parser.add_argument("--mlm-max-length", type=int, default=8192)
+    parser.add_argument(
+        "--mlm-dtype",
+        choices=("float32", "bfloat16"),
+        default="bfloat16",
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable interactive progress bars.",
@@ -336,6 +411,12 @@ def main():
         parser.error("--success-threshold must be non-negative")
     if not 0 < args.max_token_edit_rate <= 1:
         parser.error("--max-token-edit-rate must be in (0, 1]")
+    if not 0 < args.mlm_max_token_edit_rate <= 1:
+        parser.error("--mlm-max-token-edit-rate must be in (0, 1]")
+    if not -1 <= args.minimum_cosine_similarity <= 1:
+        parser.error("--minimum-cosine-similarity must be in [-1, 1]")
+    if args.mlm_max_length <= 0:
+        parser.error("--mlm-max-length must be greater than zero")
 
     run(args)
 
