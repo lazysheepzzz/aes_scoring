@@ -47,8 +47,14 @@ python .\paer\prepare_aes_rh_training_traces.py --seed 42 --dry-run
 
 python .\paer\prepare_aes_rh_training_traces.py `
   --seed 42 `
+  --n-steps 3 `
   --output .\artifacts\paer\rh_counterfactual_training_traces_seed42.jsonl
 ```
+
+`n_steps=3` is the formal training-trace protocol: training lasts three epochs
+and rotates at most one accepted edit per attacked essay per epoch.  The
+30-step setting remains reserved for final robustness evaluation; using it
+here creates many traces that never enter training.
 
 The generator writes a progress file after every essay and resumes by default.
 Use `--overwrite` only when intentionally starting the trace generation again.

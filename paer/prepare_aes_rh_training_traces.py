@@ -66,7 +66,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fraction of training essays attacked once; families are balanced.",
     )
     parser.add_argument("--max-essays", type=int, default=None)
-    parser.add_argument("--n-steps", type=int, default=30)
+    parser.add_argument(
+        "--n-steps",
+        type=int,
+        default=3,
+        help=(
+            "Accepted-edit trajectory depth. The paired trainer rotates one "
+            "trace per epoch, so the three-epoch protocol defaults to 3."
+        ),
+    )
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--n-sample-pos", type=int, default=8)
     parser.add_argument("--top-k-per-pos", type=int, default=2)
