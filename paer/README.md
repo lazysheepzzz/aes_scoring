@@ -14,6 +14,10 @@ original paper's shared attack primitives under
 - Checkpoint selection: clean-QWK gate plus the mean subset ASR of
   Rudimentary and HotFlip.
 - Mixed-AT-RH and PAER-RH consume the exact same trace JSONL.
+- Every training epoch still visits every clean training essay exactly once;
+  only the fixed selected subset receives an additional offline attack pair.
+  This keeps clean-data coverage and optimizer-step count aligned with C0 and
+  the existing attack-specific stage-two runs.
 
 Each accepted attack step produces one counterfactual trace row containing
 the before/after text and its true victim-score gain.  The gain is a soft
@@ -147,7 +151,7 @@ python .\paer\prepare_aes_rh_training_traces.py `
 python .\paer\run_aes_paer_rh_training.py `
   --trace-jsonl .\artifacts\paer\smoke_rh_traces_seed42.jsonl `
   --output-dir .\outputs\smoke_aes_paer_rh_seed42 `
-  --num-epochs 1 --max-trace-records 8 `
+  --num-epochs 1 --max-train-samples 20 `
   --per-device-train-batch-size 1 `
   --gradient-accumulation-steps 1 `
   --eval-every 1 --save-every 1

@@ -52,6 +52,7 @@ TRAINING_MODES = (MIXED_AT_RH, PAER_RH)
 class RHTrainingConfig:
     training_mode: str
     checkpoint_path: str
+    train_csv: str
     trace_jsonl: str
     valid_csv: str
     output_dir: str
@@ -81,6 +82,7 @@ class RHTrainingConfig:
     correction_scale: float = 1.0
     show_progress: bool = True
     max_trace_records: int | None = None
+    max_train_samples: int | None = None
 
     def __post_init__(self) -> None:
         if self.training_mode not in TRAINING_MODES:
@@ -162,6 +164,77 @@ class CounterfactualTraceDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         return self.items[index]
+
+
+class PairedEssayTrainingDataset(Dataset):
+    """All clean essays, with one rotating offline trace for selected rows."""
+
+    def __init__(
+        self,
+        csv_path: str | Path,
+        traces: CounterfactualTraceDataset,
+        *,
+        label_offset: float,
+        max_samples: int | None = None,
+    ):
+        frame = pd.read_csv(csv_path)
+        text_col = "full_text" if "full_text" in frame.columns else "text"
+        if text_col not in frame.columns or "score" not in frame.columns:
+            raise ValueError("Training CSV must contain full_text/text and score")
+        if max_samples is not None:
+            if max_samples <= 0:
+                raise ValueError("max_train_samples must be greater than zero")
+            frame = frame.iloc[:max_samples]
+        self.items = [
+            {
+                "row_index": int(index),
+                "original_text": str(row[text_col]),
+                "label_score_space": float(row["score"]),
+                "label": float(row["score"]) - label_offset,
+            }
+            for index, row in frame.iterrows()
+        ]
+        self.traces_by_row: dict[int, list[dict[str, Any]]] = {}
+        clean_by_row = {item["row_index"]: item for item in self.items}
+        valid_row_indices = set(clean_by_row)
+        for trace in traces.items:
+            row_index = int(trace["row_index"])
+            if row_index not in valid_row_indices:
+                continue
+            clean_item = clean_by_row[row_index]
+            if str(trace["original_text"]) != clean_item["original_text"]:
+                raise ValueError(
+                    f"Trace original_text does not match train CSV row {row_index}"
+                )
+            self.traces_by_row.setdefault(row_index, []).append(trace)
+        if not self.traces_by_row:
+            raise ValueError("No trace records match the selected training essays")
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        clean_item = dict(self.items[index])
+        traces = self.traces_by_row.get(clean_item["row_index"], [])
+        if not traces:
+            clean_item.update(
+                {
+                    "before_text": clean_item["original_text"],
+                    "adversarial_text": clean_item["original_text"],
+                    "step_gain": 0.0,
+                    "attack": "clean_only",
+                    "has_adversarial": False,
+                }
+            )
+            return clean_item
+        trace = traces[self.epoch % len(traces)]
+        clean_item.update(trace)
+        clean_item["has_adversarial"] = True
+        return clean_item
 
 
 class CleanValidationDataset(Dataset):
@@ -252,6 +325,10 @@ class RHTraceCollator:
             adversarial["attention_mask"], dtype=torch.float32
         )
         localization_mask = adversarial["attention_mask"].to(torch.float32)
+        adversarial_mask = torch.tensor(
+            [bool(item["has_adversarial"]) for item in batch],
+            dtype=torch.bool,
+        )
         for row_index, item in enumerate(batch):
             before_length = int(before["attention_mask"][row_index].sum())
             after_length = int(adversarial["attention_mask"][row_index].sum())
@@ -268,6 +345,8 @@ class RHTraceCollator:
             for position, token_id in enumerate(after_ids):
                 if token_id in self.special_ids:
                     localization_mask[row_index, position] = 0.0
+            if not bool(item["has_adversarial"]):
+                localization_mask[row_index].zero_()
         return {
             "clean_input_ids": clean["input_ids"],
             "clean_attention_mask": clean["attention_mask"],
@@ -282,6 +361,7 @@ class RHTraceCollator:
             ),
             "uplift_targets": token_targets,
             "localization_mask": localization_mask,
+            "adversarial_mask": adversarial_mask,
             "step_gains": torch.tensor(
                 [float(item["step_gain"]) for item in batch],
                 dtype=torch.float32,
@@ -346,9 +426,15 @@ class RHTrainer:
             ).model
         self.model.train()
 
-        self.train_dataset = CounterfactualTraceDataset(
+        self.trace_dataset = CounterfactualTraceDataset(
             config.trace_jsonl,
             max_records=config.max_trace_records,
+        )
+        self.train_dataset = PairedEssayTrainingDataset(
+            config.train_csv,
+            self.trace_dataset,
+            label_offset=config.label_offset,
+            max_samples=config.max_train_samples,
         )
         self.valid_dataset = CleanValidationDataset(
             config.valid_csv,
@@ -362,7 +448,7 @@ class RHTrainer:
         )
         self.clean_collator = CleanCollator(self.tokenizer, config.max_length)
         attack_counts: dict[str, int] = {}
-        for item in self.train_dataset.items:
+        for item in self.trace_dataset.items:
             attack_counts[item["attack"]] = attack_counts.get(item["attack"], 0) + 1
         missing_attacks = {"rudimentary", "hotflip"} - set(attack_counts)
         if missing_attacks:
@@ -371,7 +457,9 @@ class RHTrainer:
                 f"attacks; missing {sorted(missing_attacks)}"
             )
         print(
-            f"Trace records: {len(self.train_dataset)} {attack_counts}; "
+            f"Train essays: {len(self.train_dataset)}; "
+            f"attacked essays: {len(self.train_dataset.traces_by_row)}; "
+            f"trace records: {len(self.trace_dataset)} {attack_counts}; "
             f"Valid essays: {len(self.valid_dataset)}",
             flush=True,
         )
@@ -462,13 +550,17 @@ class RHTrainer:
 
         labels = batch["labels"].float()
         clean_loss = F.mse_loss(clean_scores, labels)
-        adversarial_loss = one_sided_score_inflation_loss(
-            clean_scores,
-            adversarial_scores,
-            labels,
-            tolerance=cfg.inflation_tolerance,
-            relative_loss_power=cfg.relative_loss_power,
-        )
+        adversarial_rows = batch["adversarial_mask"].bool()
+        if bool(adversarial_rows.any()):
+            adversarial_loss = one_sided_score_inflation_loss(
+                clean_scores[adversarial_rows],
+                adversarial_scores[adversarial_rows],
+                labels[adversarial_rows],
+                tolerance=cfg.inflation_tolerance,
+                relative_loss_power=cfg.relative_loss_power,
+            )
+        else:
+            adversarial_loss = torch.zeros((), device=self.device)
         localization_loss = torch.zeros((), device=self.device)
         false_suppression = torch.zeros((), device=self.device)
         mean_correction = torch.zeros((), device=self.device)
@@ -504,7 +596,10 @@ class RHTrainer:
                 torch.sigmoid(clean_risk_logits),
                 clean_content_mask,
             )
-            mean_correction = adversarial_output.correction.float().mean()
+            if bool(adversarial_rows.any()):
+                mean_correction = adversarial_output.correction.float()[
+                    adversarial_rows
+                ].mean()
 
         total_loss = (
             cfg.clean_loss_weight * clean_loss
@@ -520,6 +615,7 @@ class RHTrainer:
             "localization_loss": float(localization_loss.item()),
             "false_suppression": float(false_suppression.item()),
             "mean_correction": float(mean_correction.item()),
+            "n_adversarial": int(adversarial_rows.sum().item()),
         }
 
     def _optimizer_step(self, accumulated_micro_batches: int) -> None:
@@ -598,6 +694,7 @@ class RHTrainer:
         accumulated = 0
         self.optimizer.zero_grad(set_to_none=True)
         for epoch in range(cfg.num_epochs):
+            self.train_dataset.set_epoch(epoch)
             progress = tqdm(
                 loader,
                 desc=f"{cfg.training_mode} epoch {epoch + 1}/{cfg.num_epochs}",
@@ -621,6 +718,7 @@ class RHTrainer:
                         adv=f"{metrics['adversarial_loss']:.4f}",
                         loc=f"{metrics['localization_loss']:.4f}",
                         corr=f"{metrics['mean_correction']:.4f}",
+                        n_adv=metrics["n_adversarial"],
                     )
                 if did_step and global_step % cfg.eval_every == 0:
                     evaluation = self.evaluate()

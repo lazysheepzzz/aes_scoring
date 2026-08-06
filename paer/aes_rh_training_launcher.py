@@ -28,6 +28,11 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         default=REPO_ROOT / "deberta_checkpoints" / "fold0_best",
     )
     parser.add_argument(
+        "--train-csv",
+        type=Path,
+        default=REPO_ROOT / "data" / "train_fold0.csv",
+    )
+    parser.add_argument(
         "--trace-jsonl",
         type=Path,
         default=(
@@ -76,6 +81,7 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--attribution-gain-scale", type=float, default=0.1)
     parser.add_argument("--correction-scale", type=float, default=1.0)
     parser.add_argument("--max-trace-records", type=int, default=None)
+    parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--online", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -86,6 +92,7 @@ def build_config(args: argparse.Namespace, training_mode: str) -> dict:
     return {
         "training_mode": training_mode,
         "checkpoint_path": str(args.checkpoint_path),
+        "train_csv": str(args.train_csv),
         "trace_jsonl": str(args.trace_jsonl),
         "valid_csv": str(args.valid_csv),
         "output_dir": str(args.output_dir),
@@ -114,6 +121,7 @@ def build_config(args: argparse.Namespace, training_mode: str) -> dict:
         "correction_scale": args.correction_scale,
         "show_progress": not args.no_progress,
         "max_trace_records": args.max_trace_records,
+        "max_train_samples": args.max_train_samples,
     }
 
 
@@ -130,6 +138,7 @@ def main(training_mode: str) -> int:
         return 0
     for required_path, kind in (
         (args.checkpoint_path, "dir"),
+        (args.train_csv, "file"),
         (args.trace_jsonl, "file"),
         (args.valid_csv, "file"),
     ):

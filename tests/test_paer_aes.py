@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import torch
 import torch.nn as nn
 
-from paer.aes_rh_trainer import changed_token_uplift_targets
+from paer.aes_rh_trainer import (
+    PairedEssayTrainingDataset,
+    changed_token_uplift_targets,
+)
 from paer.modeling_paer import PAERForEssayScoring
 
 
@@ -90,6 +96,41 @@ class CounterfactualTargetTests(unittest.TestCase):
         )
         self.assertEqual(sum(value > 0 for value in targets), 1)
         self.assertEqual(max(targets), 1.0)
+
+
+class PairedTrainingDataTests(unittest.TestCase):
+    def test_every_clean_essay_is_kept_and_only_selected_rows_are_attacked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            csv_path = Path(temporary) / "train.csv"
+            pd.DataFrame(
+                {
+                    "full_text": ["clean zero", "clean one", "clean two"],
+                    "score": [1, 2, 3],
+                }
+            ).to_csv(csv_path, index=False)
+            traces = SimpleNamespace(
+                items=[
+                    {
+                        "row_index": 1,
+                        "original_text": "clean one",
+                        "before_text": "clean one",
+                        "adversarial_text": "changed one",
+                        "step_gain": 0.1,
+                        "attack": "hotflip",
+                    }
+                ]
+            )
+            dataset = PairedEssayTrainingDataset(
+                csv_path,
+                traces,
+                label_offset=1.0,
+            )
+
+            self.assertEqual(len(dataset), 3)
+            self.assertFalse(dataset[0]["has_adversarial"])
+            self.assertTrue(dataset[1]["has_adversarial"])
+            self.assertFalse(dataset[2]["has_adversarial"])
+            self.assertEqual(dataset[2]["label"], 2.0)
 
 
 if __name__ == "__main__":
