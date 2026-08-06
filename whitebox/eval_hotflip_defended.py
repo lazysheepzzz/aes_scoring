@@ -213,6 +213,7 @@ def _evaluate_clean(args: argparse.Namespace) -> dict[str, float | int]:
 
     predictions: list[float] = []
     labels: list[float] = []
+    paer_corrections: list[float] = []
     with torch.inference_mode():
         from tqdm.auto import tqdm
 
@@ -225,12 +226,18 @@ def _evaluate_clean(args: argparse.Namespace) -> dict[str, float | int]:
         ):
             input_ids = batch["input_ids"].to(args.device)
             attention_mask = batch["attention_mask"].to(args.device)
-            logits = scorer.model(
+            model_output = scorer.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-            ).logits.squeeze(-1)
+            )
+            logits = model_output.logits.squeeze(-1)
             predictions.extend(logits.float().cpu().numpy().tolist())
             labels.extend(batch["labels"].numpy().tolist())
+            correction = getattr(model_output, "correction", None)
+            if correction is not None:
+                paer_corrections.extend(
+                    correction.float().cpu().numpy().tolist()
+                )
 
     prediction_array = np.asarray(predictions)
     label_array = np.asarray(labels)
@@ -247,6 +254,17 @@ def _evaluate_clean(args: argparse.Namespace) -> dict[str, float | int]:
         ),
         "n": len(labels),
     }
+    if paer_corrections:
+        correction_array = np.asarray(paer_corrections, dtype=float)
+        result["mean_clean_correction"] = round(
+            float(np.mean(correction_array)), 4
+        )
+        result["p95_clean_correction"] = round(
+            float(np.quantile(correction_array, 0.95)), 4
+        )
+        result["clean_correction_rate_ge_0_05"] = round(
+            float(np.mean(correction_array >= 0.05)), 4
+        )
 
     threshold_path = args.thresholds
     if threshold_path is None:

@@ -72,6 +72,7 @@ class IterativeRudimentaryAttack:
         threshold: float = 0.1,
         max_token_edit_rate: float | None = 0.1,
         improvement_tolerance: float = 1e-6,
+        record_intermediate_texts: bool = False,
     ):
         if n_steps <= 0:
             raise ValueError("n_steps must be greater than zero")
@@ -101,6 +102,7 @@ class IterativeRudimentaryAttack:
         self.threshold = threshold
         self.max_token_edit_rate = max_token_edit_rate
         self.improvement_tolerance = improvement_tolerance
+        self.record_intermediate_texts = record_intermediate_texts
 
     def _token_ids(self, text: str) -> Tuple[int, ...]:
         encoded = self.scorer.tokenizer(
@@ -200,8 +202,7 @@ class IterativeRudimentaryAttack:
                 best_token_ids = candidate_token_ids[best_index]
                 best_score = candidate_score
                 accepted_edits += 1
-                history.append(
-                    {
+                history_entry = {
                         "step": step,
                         "score": best_score,
                         "step_gain": best_score - previous_score,
@@ -213,7 +214,10 @@ class IterativeRudimentaryAttack:
                             best_text,
                         ),
                     }
-                )
+                if self.record_intermediate_texts:
+                    history_entry["before_text"] = previous_text
+                    history_entry["after_text"] = best_text
+                history.append(history_entry)
 
             if best_score - original_score >= self.threshold:
                 break

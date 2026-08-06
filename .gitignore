@@ -6,3 +6,6 @@ venv/
 .vscode/
 deberta_checkpoints
 *.egg-info/
+outputs/
+artifacts/
+.cache/

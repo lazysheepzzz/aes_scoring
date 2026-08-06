@@ -52,6 +52,7 @@ class HotFlipAttack:
         threshold: float = 0.1,             # 成功阈值（pert - orig >= threshold）
         max_token_edit_rate: float | None = 0.1,
         specials=None,
+        record_intermediate_texts: bool = False,
     ):
         if n_steps <= 0:
             raise ValueError("n_steps must be greater than zero")
@@ -74,6 +75,7 @@ class HotFlipAttack:
         self.batch_size = batch_size
         self.threshold = threshold
         self.max_token_edit_rate = max_token_edit_rate
+        self.record_intermediate_texts = record_intermediate_texts
         tok = scorer.tokenizer
         self.specials = specials if specials is not None else set(tok.all_special_ids)
 
@@ -213,7 +215,7 @@ class HotFlipAttack:
             all_candidates: List[Dict] = []
             for candidate, score in zip(candidates, scores):
                 score = float(score)
-                new_history = candidate["history"] + [{
+                history_entry = {
                     "step": step,
                     "pos": candidate["pos"],
                     "old_id": candidate["old_id"],
@@ -221,7 +223,15 @@ class HotFlipAttack:
                     "score": score,
                     "step_gain": score - candidate["beam_score"],
                     "delta": score - original_score,
-                }]
+                }
+                if self.record_intermediate_texts:
+                    history_entry["before_text"] = (
+                        candidate["history"][-1]["after_text"]
+                        if candidate["history"]
+                        else text
+                    )
+                    history_entry["after_text"] = candidate["text"]
+                new_history = candidate["history"] + [history_entry]
                 all_candidates.append({
                     "text": candidate["text"],
                     "score": score,

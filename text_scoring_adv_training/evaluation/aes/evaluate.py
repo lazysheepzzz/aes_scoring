@@ -118,7 +118,7 @@ class AttackResult:
 
     def summary(self) -> Dict:
         n = self.n_essays or 1
-        return {
+        row = {
             "attack": self.attack_name,
             "n_essays": self.n_essays,
             "success_threshold": self.success_threshold,
@@ -131,6 +131,59 @@ class AttackResult:
             "band_asr": round(self.n_band_cross / n, 4),
             "upward_band_asr": round(self.n_band_cross / n, 4),
         }
+        scored_details = [
+            detail
+            for detail in self.details
+            if detail.get("true_score") is not None
+        ]
+        if len(scored_details) >= 2:
+            from sklearn.metrics import cohen_kappa_score
+
+            # Project data stores human labels in score space 1-6 while model
+            # logits and attack thresholds use label space 0-5.
+            true_bins = np.clip(
+                np.round(
+                    [float(detail["true_score"]) - 1.0 for detail in scored_details]
+                ).astype(int),
+                0,
+                5,
+            )
+            original_bins = np.clip(
+                np.round(
+                    [float(detail["original_score"]) for detail in scored_details]
+                ).astype(int),
+                0,
+                5,
+            )
+            adversarial_bins = np.clip(
+                np.round(
+                    [float(detail["perturbed_score"]) for detail in scored_details]
+                ).astype(int),
+                0,
+                5,
+            )
+            if len(np.unique(true_bins)) >= 2:
+                row["original_qwk"] = round(
+                    float(
+                        cohen_kappa_score(
+                            true_bins,
+                            original_bins,
+                            weights="quadratic",
+                        )
+                    ),
+                    4,
+                )
+                row["adversarial_qwk"] = round(
+                    float(
+                        cohen_kappa_score(
+                            true_bins,
+                            adversarial_bins,
+                            weights="quadratic",
+                        )
+                    ),
+                    4,
+                )
+        return row
 
 
 def evaluate_attack(

@@ -47,15 +47,26 @@ class AESScorer(nn.Module):
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
 
-        # Load model
-        config = AutoConfig.from_pretrained(str(self.checkpoint_path), trust_remote_code=True)
-        config.num_labels = 1          # regression head
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            str(self.checkpoint_path),
-            config=config,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-        ).to(device)
+        # Load either a standard AES regressor or a PAER directional-routing
+        # checkpoint.  The original checkpoint format remains unchanged.
+        if (self.checkpoint_path / "paer_config.json").is_file():
+            from paer.modeling_paer import PAERForEssayScoring
+
+            self.model = PAERForEssayScoring.from_pretrained(
+                self.checkpoint_path,
+                dtype=dtype,
+            ).to(device)
+        else:
+            config = AutoConfig.from_pretrained(
+                str(self.checkpoint_path), trust_remote_code=True
+            )
+            config.num_labels = 1          # regression head
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                str(self.checkpoint_path),
+                config=config,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+            ).to(device)
         self.model.eval()
 
         self.device = device

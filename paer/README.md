@@ -1,0 +1,156 @@
+# PAER-AES main experiment
+
+This directory contains the new AES contribution.  It does not replace the
+original paper's shared attack primitives under
+`text_scoring_adv_training/evaluation/robustness_tests/common/`.
+
+## Experimental boundary
+
+- Training attacks: Rudimentary and HotFlip only.
+- Held-out attack: MLM-guided.  It must not be used for training, validation,
+  hyperparameter tuning, or checkpoint selection.
+- Attribution victim: the frozen B0 checkpoint by default.
+- Training data: `train_fold0.csv` only.
+- Checkpoint selection: clean-QWK gate plus the mean subset ASR of
+  Rudimentary and HotFlip.
+- Mixed-AT-RH and PAER-RH consume the exact same trace JSONL.
+
+Each accepted attack step produces one counterfactual trace row containing
+the before/after text and its true victim-score gain.  The gain is a soft
+`victim-induced score inflation` target, not a human writing-quality label.
+
+## Model
+
+PAER keeps the original DeBERTa global score and adds:
+
+1. a token-level score-inflation risk head;
+2. a token-level positive-evidence head;
+3. a fixed-form correction that subtracts only evidence that is both positive
+   and predicted to be inflationary.
+
+The correction can only lower suspicious positive evidence.  It never masks
+negative quality evidence, so spelling, grammar, and semantic damage can still
+reduce an essay's score.
+
+## Remote run order (PowerShell)
+
+Run every dry-run first after pulling the repository.
+
+### 1. Prepare the shared counterfactual trace dataset
+
+```powershell
+python .\paer\prepare_aes_rh_training_traces.py --seed 42 --dry-run
+
+python .\paer\prepare_aes_rh_training_traces.py `
+  --seed 42 `
+  --output .\artifacts\paer\rh_counterfactual_training_traces_seed42.jsonl
+```
+
+The generator writes a progress file after every essay and resumes by default.
+Use `--overwrite` only when intentionally starting the trace generation again.
+
+### 2. Train the same-data Mixed-AT-RH baseline
+
+```powershell
+python .\paer\run_aes_mixed_at_rh_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_mixed_at_rh_seed42 `
+  --dry-run
+
+python .\paer\run_aes_mixed_at_rh_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_mixed_at_rh_seed42
+```
+
+### 3. Train PAER-RH
+
+```powershell
+python .\paer\run_aes_paer_rh_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_paer_rh_seed42 `
+  --dry-run
+
+python .\paer\run_aes_paer_rh_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_paer_rh_seed42
+```
+
+### 4. Select checkpoints without MLM leakage
+
+Run once for Mixed-AT and once for PAER.  The selector uses the same fixed
+validation subset and evaluates both training attacks.
+
+```powershell
+python .\paer\select_aes_rh_checkpoint.py `
+  --defense-output-dir .\outputs\aes_mixed_at_rh_seed42 `
+  --selection-output-dir .\outputs\aes_mixed_at_rh_checkpoint_selection_seed42
+
+python .\paer\select_aes_rh_checkpoint.py `
+  --defense-output-dir .\outputs\aes_paer_rh_seed42 `
+  --selection-output-dir .\outputs\aes_paer_rh_checkpoint_selection_seed42
+```
+
+Read the selected path:
+
+```powershell
+$mixed = (Get-Content `
+  .\outputs\aes_mixed_at_rh_checkpoint_selection_seed42\best_checkpoint.json `
+  | ConvertFrom-Json).checkpoint_path
+
+$paer = (Get-Content `
+  .\outputs\aes_paer_rh_checkpoint_selection_seed42\best_checkpoint.json `
+  | ConvertFrom-Json).checkpoint_path
+```
+
+### 5. Evaluate seen attacks first
+
+Use the existing evaluator.  It loads PAER checkpoints automatically, and
+HotFlip differentiates through the complete PAER correction module.
+
+```powershell
+python .\whitebox\evaluate_aes_checkpoint.py `
+  --checkpoint $paer --attack rudimentary `
+  --out .\outputs\eval_rudimentary_paer_rh_seed42 --seed 42
+
+python .\whitebox\evaluate_aes_checkpoint.py `
+  --checkpoint $paer --attack hotflip --skip-clean `
+  --out .\outputs\eval_hotflip_paer_rh_seed42 --seed 42
+```
+
+Repeat the two commands with `$mixed` for the Mixed-AT baseline.
+
+### 6. Freeze the method, then run MLM once
+
+Do not change architecture, weights, loss coefficients, or checkpoint after
+this evaluation.
+
+```powershell
+python .\mlm_guided\evaluate_aes_mlm_guided.py `
+  --checkpoint $mixed `
+  --out .\outputs\eval_mlm_mixed_at_rh_seed42 --seed 42
+
+python .\mlm_guided\evaluate_aes_mlm_guided.py `
+  --checkpoint $paer `
+  --out .\outputs\eval_mlm_paer_rh_seed42 --seed 42
+```
+
+## Small smoke run
+
+Use separate readable files so smoke artifacts cannot be mistaken for formal
+results:
+
+```powershell
+python .\paer\prepare_aes_rh_training_traces.py `
+  --max-essays 20 --attack-fraction 1.0 --n-steps 2 `
+  --output .\artifacts\paer\smoke_rh_traces_seed42.jsonl --overwrite
+
+python .\paer\run_aes_paer_rh_training.py `
+  --trace-jsonl .\artifacts\paer\smoke_rh_traces_seed42.jsonl `
+  --output-dir .\outputs\smoke_aes_paer_rh_seed42 `
+  --num-epochs 1 --max-trace-records 8 `
+  --per-device-train-batch-size 1 `
+  --gradient-accumulation-steps 1 `
+  --eval-every 1 --save-every 1
+```
+
+Smoke outputs are for execution validation only and must not enter tables.
