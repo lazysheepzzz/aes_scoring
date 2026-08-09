@@ -319,17 +319,37 @@ class RHTraceCollator:
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         clean = self._encode([str(item["original_text"]) for item in batch])
-        before = self._encode([str(item["before_text"]) for item in batch])
-        adversarial = self._encode([str(item["adversarial_text"]) for item in batch])
+        selected = [
+            (row_index, item)
+            for row_index, item in enumerate(batch)
+            if bool(item["has_adversarial"])
+        ]
+        adversarial_indices = torch.tensor(
+            [row_index for row_index, _ in selected],
+            dtype=torch.long,
+        )
+        selected_items = [item for _, item in selected]
+        if selected_items:
+            before = self._encode(
+                [str(item["before_text"]) for item in selected_items]
+            )
+            adversarial = self._encode(
+                [str(item["adversarial_text"]) for item in selected_items]
+            )
+        else:
+            before = {
+                "input_ids": torch.empty((0, 1), dtype=torch.long),
+                "attention_mask": torch.empty((0, 1), dtype=torch.long),
+            }
+            adversarial = {
+                "input_ids": torch.empty((0, 1), dtype=torch.long),
+                "attention_mask": torch.empty((0, 1), dtype=torch.long),
+            }
         token_targets = torch.zeros_like(
             adversarial["attention_mask"], dtype=torch.float32
         )
         localization_mask = adversarial["attention_mask"].to(torch.float32)
-        adversarial_mask = torch.tensor(
-            [bool(item["has_adversarial"]) for item in batch],
-            dtype=torch.bool,
-        )
-        for row_index, item in enumerate(batch):
+        for row_index, item in enumerate(selected_items):
             before_length = int(before["attention_mask"][row_index].sum())
             after_length = int(adversarial["attention_mask"][row_index].sum())
             before_ids = before["input_ids"][row_index, :before_length].tolist()
@@ -345,8 +365,6 @@ class RHTraceCollator:
             for position, token_id in enumerate(after_ids):
                 if token_id in self.special_ids:
                     localization_mask[row_index, position] = 0.0
-            if not bool(item["has_adversarial"]):
-                localization_mask[row_index].zero_()
         return {
             "clean_input_ids": clean["input_ids"],
             "clean_attention_mask": clean["attention_mask"],
@@ -361,12 +379,12 @@ class RHTraceCollator:
             ),
             "uplift_targets": token_targets,
             "localization_mask": localization_mask,
-            "adversarial_mask": adversarial_mask,
+            "adversarial_indices": adversarial_indices,
             "step_gains": torch.tensor(
-                [float(item["step_gain"]) for item in batch],
+                [float(item["step_gain"]) for item in selected_items],
                 dtype=torch.float32,
             ),
-            "attacks": [str(item["attack"]) for item in batch],
+            "attacks": [str(item["attack"]) for item in selected_items],
         }
 
 
@@ -536,52 +554,25 @@ class RHTrainer:
     def train_step(self, batch: dict[str, Any]) -> dict[str, float]:
         cfg = self.config
         batch = self._to_device(batch)
+        labels = batch["labels"].float()
+        adversarial_indices = batch["adversarial_indices"].long()
+        n_adversarial = int(adversarial_indices.numel())
+
+        # Backpropagate the clean branch first so its full DeBERTa graph can be
+        # released before constructing the adversarial graph.  The relative
+        # inflation term already detaches clean scores, making this exactly
+        # equivalent to backpropagating the summed objective once.
         with self._autocast_context():
             clean_output = self.model(
                 input_ids=batch["clean_input_ids"],
                 attention_mask=batch["clean_attention_mask"],
             )
-            adversarial_output = self.model(
-                input_ids=batch["adversarial_input_ids"],
-                attention_mask=batch["adversarial_attention_mask"],
-            )
             clean_scores = clean_output.logits.squeeze(-1).float()
-            adversarial_scores = adversarial_output.logits.squeeze(-1).float()
-
-        labels = batch["labels"].float()
         clean_loss = F.mse_loss(clean_scores, labels)
-        adversarial_rows = batch["adversarial_mask"].bool()
-        if bool(adversarial_rows.any()):
-            adversarial_loss = one_sided_score_inflation_loss(
-                clean_scores[adversarial_rows],
-                adversarial_scores[adversarial_rows],
-                labels[adversarial_rows],
-                tolerance=cfg.inflation_tolerance,
-                relative_loss_power=cfg.relative_loss_power,
-            )
-        else:
-            adversarial_loss = torch.zeros((), device=self.device)
-        localization_loss = torch.zeros((), device=self.device)
+        clean_localization = torch.zeros((), device=self.device)
         false_suppression = torch.zeros((), device=self.device)
-        mean_correction = torch.zeros((), device=self.device)
-
         if cfg.training_mode == PAER_RH:
-            targets = batch["uplift_targets"].float()
-            mask = batch["localization_mask"].float()
-            adv_risk_logits = adversarial_output.risk_logits.float()
             clean_risk_logits = clean_output.risk_logits.float()
-            positive_multiplier = 1.0 + (
-                cfg.localization_positive_weight - 1.0
-            ) * (targets > 0).float()
-            adv_localization = F.binary_cross_entropy_with_logits(
-                adv_risk_logits,
-                targets,
-                reduction="none",
-            )
-            adv_localization = masked_mean(
-                adv_localization * positive_multiplier,
-                mask,
-            )
             clean_content_mask = clean_output.content_mask.float()
             clean_localization = masked_mean(
                 F.binary_cross_entropy_with_logits(
@@ -591,31 +582,83 @@ class RHTrainer:
                 ),
                 clean_content_mask,
             )
-            localization_loss = 0.5 * (adv_localization + clean_localization)
             false_suppression = masked_mean(
                 torch.sigmoid(clean_risk_logits),
                 clean_content_mask,
             )
-            if bool(adversarial_rows.any()):
-                mean_correction = adversarial_output.correction.float()[
-                    adversarial_rows
-                ].mean()
+        clean_objective = cfg.clean_loss_weight * clean_loss
+        if cfg.training_mode == PAER_RH:
+            clean_objective = (
+                clean_objective
+                + 0.5 * cfg.localization_loss_weight * clean_localization
+                + cfg.clean_false_suppression_weight * false_suppression
+            )
+        clean_loss_value = float(clean_loss.item())
+        clean_localization_value = float(clean_localization.item())
+        false_suppression_value = float(false_suppression.item())
+        clean_objective_value = float(clean_objective.item())
+        clean_score_reference = clean_scores.detach()
+        (clean_objective / cfg.gradient_accumulation_steps).backward()
+        del clean_output, clean_scores, clean_loss, clean_objective
 
-        total_loss = (
-            cfg.clean_loss_weight * clean_loss
-            + cfg.adversarial_loss_weight * adversarial_loss
-            + cfg.localization_loss_weight * localization_loss
-            + cfg.clean_false_suppression_weight * false_suppression
+        adversarial_loss = torch.zeros((), device=self.device)
+        adversarial_localization = torch.zeros((), device=self.device)
+        mean_correction = torch.zeros((), device=self.device)
+        adversarial_objective_value = 0.0
+        if n_adversarial:
+            with self._autocast_context():
+                adversarial_output = self.model(
+                    input_ids=batch["adversarial_input_ids"],
+                    attention_mask=batch["adversarial_attention_mask"],
+                )
+                adversarial_scores = adversarial_output.logits.squeeze(-1).float()
+            adversarial_loss = one_sided_score_inflation_loss(
+                clean_score_reference[adversarial_indices],
+                adversarial_scores,
+                labels[adversarial_indices],
+                tolerance=cfg.inflation_tolerance,
+                relative_loss_power=cfg.relative_loss_power,
+            )
+            adversarial_objective = (
+                cfg.adversarial_loss_weight * adversarial_loss
+            )
+            if cfg.training_mode == PAER_RH:
+                targets = batch["uplift_targets"].float()
+                mask = batch["localization_mask"].float()
+                adversarial_risk_logits = adversarial_output.risk_logits.float()
+                positive_multiplier = 1.0 + (
+                    cfg.localization_positive_weight - 1.0
+                ) * (targets > 0).float()
+                adversarial_localization = F.binary_cross_entropy_with_logits(
+                    adversarial_risk_logits,
+                    targets,
+                    reduction="none",
+                )
+                adversarial_localization = masked_mean(
+                    adversarial_localization * positive_multiplier,
+                    mask,
+                )
+                adversarial_objective = (
+                    adversarial_objective
+                    + 0.5
+                    * cfg.localization_loss_weight
+                    * adversarial_localization
+                )
+                mean_correction = adversarial_output.correction.float().mean()
+            adversarial_objective_value = float(adversarial_objective.item())
+            (adversarial_objective / cfg.gradient_accumulation_steps).backward()
+
+        localization_loss_value = 0.5 * (
+            clean_localization_value + float(adversarial_localization.item())
         )
-        (total_loss / cfg.gradient_accumulation_steps).backward()
         return {
-            "total_loss": float(total_loss.item()),
-            "clean_loss": float(clean_loss.item()),
+            "total_loss": clean_objective_value + adversarial_objective_value,
+            "clean_loss": clean_loss_value,
             "adversarial_loss": float(adversarial_loss.item()),
-            "localization_loss": float(localization_loss.item()),
-            "false_suppression": float(false_suppression.item()),
+            "localization_loss": localization_loss_value,
+            "false_suppression": false_suppression_value,
             "mean_correction": float(mean_correction.item()),
-            "n_adversarial": int(adversarial_rows.sum().item()),
+            "n_adversarial": n_adversarial,
         }
 
     def _optimizer_step(self, accumulated_micro_batches: int) -> None:

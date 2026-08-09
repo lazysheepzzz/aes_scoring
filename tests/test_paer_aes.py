@@ -11,6 +11,7 @@ import torch.nn as nn
 
 from paer.aes_rh_trainer import (
     PairedEssayTrainingDataset,
+    RHTraceCollator,
     changed_token_uplift_targets,
 )
 from paer.modeling_paer import PAERForEssayScoring
@@ -131,6 +132,61 @@ class PairedTrainingDataTests(unittest.TestCase):
             self.assertTrue(dataset[1]["has_adversarial"])
             self.assertFalse(dataset[2]["has_adversarial"])
             self.assertEqual(dataset[2]["label"], 2.0)
+
+    def test_collator_encodes_only_selected_adversarial_rows(self):
+        class _TinyTokenizer:
+            all_special_ids = [0, 2]
+
+            def __call__(self, texts, **_kwargs):
+                vocabulary = {"alpha": 10, "beta": 11, "gamma": 12}
+                rows = [
+                    [0, *[vocabulary.get(word, 9) for word in text.split()], 2]
+                    for text in texts
+                ]
+                width = max(len(row) for row in rows)
+                input_ids = torch.tensor(
+                    [row + [0] * (width - len(row)) for row in rows]
+                )
+                attention_mask = (input_ids != 0).long()
+                attention_mask[:, 0] = 1
+                return {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                }
+
+        collator = RHTraceCollator(
+            _TinyTokenizer(),
+            max_length=16,
+            label_offset=1.0,
+            gain_scale=0.1,
+        )
+        batch = collator(
+            [
+                {
+                    "original_text": "alpha beta",
+                    "before_text": "alpha beta",
+                    "adversarial_text": "alpha beta",
+                    "label_score_space": 2.0,
+                    "step_gain": 0.0,
+                    "attack": "clean_only",
+                    "has_adversarial": False,
+                },
+                {
+                    "original_text": "alpha beta",
+                    "before_text": "alpha beta",
+                    "adversarial_text": "alpha gamma",
+                    "label_score_space": 3.0,
+                    "step_gain": 0.1,
+                    "attack": "hotflip",
+                    "has_adversarial": True,
+                },
+            ]
+        )
+
+        self.assertEqual(batch["clean_input_ids"].shape[0], 2)
+        self.assertEqual(batch["adversarial_input_ids"].shape[0], 1)
+        self.assertEqual(batch["adversarial_indices"].tolist(), [1])
+        self.assertGreater(float(batch["uplift_targets"].sum()), 0.0)
 
 
 if __name__ == "__main__":
