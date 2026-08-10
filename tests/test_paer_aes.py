@@ -16,6 +16,7 @@ from paer.aes_rh_trainer import (
 )
 from paer.modeling_paer import PAERForEssayScoring
 from paer.select_aes_rh_checkpoint import restrict_candidates_to_common_budget
+from text_scoring_adv_training.evaluation.aes.run_attacks import build_attack
 
 
 class _FakeEncoder(nn.Module):
@@ -210,6 +211,14 @@ class CheckpointBudgetTests(unittest.TestCase):
 
         self.assertEqual(eligible, candidates)
         self.assertEqual(excluded, [])
+
+    def test_evaluation_batch_size_reaches_attack_candidate_scorer(self):
+        scorer = SimpleNamespace(
+            tokenizer=SimpleNamespace(all_special_ids=[0, 1, 2])
+        )
+        attack = build_attack("hotflip", scorer, batch_size=4)
+
+        self.assertEqual(attack.batch_size, 4)
 
 
 if __name__ == "__main__":

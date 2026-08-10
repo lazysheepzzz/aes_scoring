@@ -91,18 +91,22 @@ Run once for Mixed-AT and once for PAER.  The selector uses the same fixed
 validation subset and evaluates both training attacks.  The formal comparison
 uses explicit checkpoints up to `gstep1400`, the last common saved training
 budget available for both runs.  `best` and `final` aliases are deliberately
-excluded because their step is not encoded in the directory name.
+excluded because their step is not encoded in the directory name.  Candidate
+scoring defaults to batch size 4 so float32 evaluation leaves safe headroom on
+the 24 GB RTX 3090; the same batch size must be used for Mixed-AT and PAER.
 
 ```powershell
 python .\paer\select_aes_rh_checkpoint.py `
   --defense-output-dir .\outputs\aes_mixed_at_rh_seed42 `
   --selection-output-dir .\outputs\aes_mixed_at_rh_checkpoint_selection_seed42 `
-  --max-checkpoint-step 1400
+  --max-checkpoint-step 1400 `
+  --batch-size 4
 
 python .\paer\select_aes_rh_checkpoint.py `
   --defense-output-dir .\outputs\aes_paer_rh_seed42 `
   --selection-output-dir .\outputs\aes_paer_rh_checkpoint_selection_seed42 `
-  --max-checkpoint-step 1400
+  --max-checkpoint-step 1400 `
+  --batch-size 4
 ```
 
 Read the selected path:

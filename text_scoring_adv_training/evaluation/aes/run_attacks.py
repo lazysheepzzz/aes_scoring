@@ -108,6 +108,7 @@ def build_attack(
     minimum_cosine_similarity: float = 0.90,
     mlm_max_length: int = 8192,
     mlm_dtype="bfloat16",
+    batch_size: int = 32,
 ):
     """Instantiate an attack using the unified AES evaluation protocol."""
     if attack_name == "rudimentary":
@@ -116,7 +117,7 @@ def build_attack(
             n_steps=n_steps,
             beam_size=beam_size,
             candidates_per_step=max_candidates_per_step,
-            batch_size=32,
+            batch_size=batch_size,
             threshold=success_threshold,
             max_token_edit_rate=max_token_edit_rate,
         )
@@ -130,6 +131,7 @@ def build_attack(
             n_sample_pos=n_sample_pos,
             top_k_per_pos=top_k_per_pos,
             max_candidates_per_step=max_candidates_per_step,
+            batch_size=batch_size,
             threshold=success_threshold,
             max_token_edit_rate=max_token_edit_rate,
         )
@@ -148,7 +150,7 @@ def build_attack(
             n_sample_pos=n_sample_pos,
             top_k_per_pos=top_k_per_pos,
             max_candidates_per_step=max_candidates_per_step,
-            batch_size=32,
+            batch_size=batch_size,
             threshold=success_threshold,
             max_token_edit_rate=mlm_max_token_edit_rate,
             minimum_similarity=minimum_cosine_similarity,
@@ -228,6 +230,7 @@ def run(args):
             minimum_cosine_similarity=args.minimum_cosine_similarity,
             mlm_max_length=args.mlm_max_length,
             mlm_dtype=args.mlm_dtype,
+            batch_size=args.batch_size,
         )
 
         def attack_fn(text):

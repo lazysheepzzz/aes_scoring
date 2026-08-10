@@ -40,6 +40,10 @@ def build_parser():
             REPO_ROOT / "outputs" / "aes_paer_rh_checkpoint_selection_seed42"
         ),
         selection_steps=10,
+        # A 1024-token DeBERTa/PAER forward at the inherited batch size of 16
+        # nearly exhausts a 24 GB RTX 3090 in float32.  This one value is
+        # propagated to clean, original, and attack-candidate scoring.
+        batch_size=4,
     )
     parser.add_argument(
         "--rudimentary-selection-steps",
@@ -236,6 +240,8 @@ def main() -> int:
             "subset_size": args.subset_size,
             "subset_seed": args.subset_seed,
             "attack_seed": args.seed,
+            "evaluation_batch_size": args.batch_size,
+            "evaluation_dtype": args.dtype,
             "hotflip_selection_steps": args.selection_steps,
             "rudimentary_selection_steps": args.rudimentary_selection_steps,
             "max_checkpoint_step": args.max_checkpoint_step or None,
