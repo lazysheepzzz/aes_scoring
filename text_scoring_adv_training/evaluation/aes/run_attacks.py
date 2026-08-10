@@ -18,10 +18,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -31,12 +34,82 @@ from text_scoring_adv_training.evaluation.aes.evaluate import evaluate_attack, p
 from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import (
     IterativeRudimentaryAttack,
 )
-from text_scoring_adv_training.evaluation.aes.attacks.injection import InjectionAttack
+from text_scoring_adv_training.evaluation.aes.attacks.injection import (
+    IterativeInjectionAttack,
+)
 from text_scoring_adv_training.evaluation.aes.attacks.hotflip import HotFlipAttack
 from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import MLMGuidedAttack
 
 
-AVAILABLE_ATTACKS = ["rudimentary", "injection", "hotflip", "mlm_guided", "all"]
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_INJECTION_SENTENCE_BANK = (
+    REPO_ROOT / "injection" / "wikipedia_sentences_100.txt"
+)
+AVAILABLE_ATTACKS = [
+    "rudimentary",
+    "injection",
+    "injection_external",
+    "injection_self_dup",
+    "injection_family",
+    "hotflip",
+    "mlm_guided",
+    "all",
+]
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_injection_sentence_bank(path: str | Path) -> list[str]:
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Injection sentence bank not found: {path}")
+    sentences = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not sentences:
+        raise ValueError(f"Injection sentence bank is empty: {path}")
+    return sentences
+
+
+def build_injection_family_summary(
+    rows: list[dict],
+    *,
+    n_essays: int,
+) -> dict | None:
+    injection_rows = [
+        row
+        for row in rows
+        if row["attack"] in {"injection_external", "injection_self_dup"}
+    ]
+    if len(injection_rows) != 2:
+        return None
+    family_fields = (
+        "asr",
+        "avg_delta",
+        "band_asr",
+        "upward_band_asr",
+        "original_qwk",
+        "adversarial_qwk",
+    )
+    family_summary = {
+        "attack": "injection_family",
+        "aggregation": "equal_weight_mean_of_external_and_self_duplication",
+        "subattacks": [row["attack"] for row in injection_rows],
+        "n_essays_per_subattack": n_essays,
+    }
+    for field in family_fields:
+        values = [float(row[field]) for row in injection_rows if field in row]
+        if len(values) == len(injection_rows):
+            family_summary[field] = round(float(np.mean(values)), 4)
+    return family_summary
 
 
 def load_essays(csv_path: str | Path, n: int | None = None, score_col: str = "score"):
@@ -109,6 +182,7 @@ def build_attack(
     mlm_max_length: int = 8192,
     mlm_dtype="bfloat16",
     batch_size: int = 32,
+    injection_sentence_bank: str | Path = DEFAULT_INJECTION_SENTENCE_BANK,
 ):
     """Instantiate an attack using the unified AES evaluation protocol."""
     if attack_name == "rudimentary":
@@ -121,8 +195,25 @@ def build_attack(
             threshold=success_threshold,
             max_token_edit_rate=max_token_edit_rate,
         )
-    elif attack_name == "injection":
-        return InjectionAttack(mode="injection", position="random", n_variants=1)
+    elif attack_name in ("injection", "injection_external"):
+        return IterativeInjectionAttack(
+            scorer,
+            mode="external",
+            sentence_bank=load_injection_sentence_bank(injection_sentence_bank),
+            n_steps=n_steps,
+            candidates_per_step=max_candidates_per_step,
+            batch_size=batch_size,
+            threshold=success_threshold,
+        )
+    elif attack_name == "injection_self_dup":
+        return IterativeInjectionAttack(
+            scorer,
+            mode="self_duplication",
+            n_steps=n_steps,
+            candidates_per_step=max_candidates_per_step,
+            batch_size=batch_size,
+            threshold=success_threshold,
+        )
     elif attack_name == "hotflip":
         return HotFlipAttack(
             scorer,
@@ -164,7 +255,6 @@ def build_attack(
 
 
 def run(args):
-    import numpy as np
     import torch
 
     out_dir = Path(args.out)
@@ -201,7 +291,15 @@ def run(args):
 
     # Run attacks
     if args.attack == "all":
-        attack_names = ["rudimentary", "injection", "hotflip", "mlm_guided"]
+        attack_names = [
+            "rudimentary",
+            "injection_external",
+            "injection_self_dup",
+            "hotflip",
+            "mlm_guided",
+        ]
+    elif args.attack == "injection_family":
+        attack_names = ["injection_external", "injection_self_dup"]
     else:
         attack_names = [args.attack]
 
@@ -231,6 +329,7 @@ def run(args):
             mlm_max_length=args.mlm_max_length,
             mlm_dtype=args.mlm_dtype,
             batch_size=args.batch_size,
+            injection_sentence_bank=args.injection_sentence_bank,
         )
 
         def attack_fn(text):
@@ -251,6 +350,15 @@ def run(args):
     # Print and save summary
     print(f"\n[4/4] Summary:")
     rows = print_summary(results, out_path=out_dir / "asr_summary.json")
+
+    family_summary = build_injection_family_summary(rows, n_essays=len(essays))
+    if family_summary is not None:
+        with open(
+            out_dir / "injection_family_summary.json",
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(family_summary, file, indent=2, ensure_ascii=False)
 
     # Save per-essay details
     for r in results:
@@ -311,6 +419,45 @@ def run(args):
                 "independently re-encoded by the DeBERTa victim"
             ),
         },
+        "injection": {
+            **shared_attack_parameters,
+            "attack_type": "external_wikipedia",
+            "success_threshold": args.success_threshold,
+            "sentence_bank": str(Path(args.injection_sentence_bank).resolve()),
+            "sentence_bank_sha256": _sha256(Path(args.injection_sentence_bank)),
+            "candidate_grid": "up_to_4_sentences_x_4_destinations",
+            "acceptance": "strict_score_improvement",
+            "token_edit_rate_cap": None,
+        },
+        "injection_external": {
+            **shared_attack_parameters,
+            "attack_type": "external_wikipedia",
+            "success_threshold": args.success_threshold,
+            "sentence_bank": str(Path(args.injection_sentence_bank).resolve()),
+            "sentence_bank_sha256": _sha256(Path(args.injection_sentence_bank)),
+            "candidate_grid": "up_to_4_sentences_x_4_destinations",
+            "acceptance": "strict_score_improvement",
+            "token_edit_rate_cap": None,
+        },
+        "injection_self_dup": {
+            **shared_attack_parameters,
+            "attack_type": "self_duplication",
+            "success_threshold": args.success_threshold,
+            "candidate_grid": "up_to_4_source_sentences_x_4_destinations",
+            "acceptance": "strict_score_improvement",
+            "token_edit_rate_cap": None,
+        },
+        "injection_family": {
+            "subattacks": ["injection_external", "injection_self_dup"],
+            "family_aggregation": "equal_weight_mean",
+            "n_steps": args.n_steps,
+            "beam_size": args.beam_size,
+            "max_candidates_per_step": args.max_candidates_per_step,
+            "success_threshold": args.success_threshold,
+            "sentence_bank": str(Path(args.injection_sentence_bank).resolve()),
+            "sentence_bank_sha256": _sha256(Path(args.injection_sentence_bank)),
+            "token_edit_rate_cap": None,
+        },
     }
     manifest = {
         "victim": str(args.victim),
@@ -366,6 +513,11 @@ def main():
     parser.add_argument("--top-k-per-pos", type=int, default=2)
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
+    parser.add_argument(
+        "--injection-sentence-bank",
+        default=str(DEFAULT_INJECTION_SENTENCE_BANK),
+        help="Fixed external-sentence bank used by Injection External.",
+    )
     parser.add_argument(
         "--mlm-max-token-edit-rate",
         type=float,

@@ -12,6 +12,7 @@ import torch.nn as nn
 from paer.aes_rh_trainer import (
     PairedEssayTrainingDataset,
     RHTraceCollator,
+    balanced_binary_localization_loss,
     changed_token_uplift_targets,
 )
 from paer.modeling_paer import PAERForEssayScoring
@@ -77,6 +78,32 @@ class PAERModelTests(unittest.TestCase):
         output.logits.sum().backward()
         self.assertIsNotNone(embeddings.grad)
 
+    def test_topk_sum_does_not_dilute_sparse_evidence_by_document_length(self):
+        model = PAERForEssayScoring(
+            _FakeBaseModel(),
+            routing_aggregation="topk_sum",
+            routing_top_k=2,
+        )
+        with torch.no_grad():
+            model.risk_head.weight.zero_()
+            model.risk_head.bias.zero_()
+            model.positive_evidence_head.weight.zero_()
+            model.positive_evidence_head.bias.zero_()
+        short = model(
+            input_ids=torch.tensor([[1, 3, 4, 2, 0, 0]]),
+            attention_mask=torch.tensor([[1, 1, 1, 1, 0, 0]]),
+        )
+        long = model(
+            input_ids=torch.tensor([[1, 3, 4, 5, 6, 2]]),
+            attention_mask=torch.ones(1, 6, dtype=torch.long),
+        )
+
+        self.assertAlmostEqual(
+            float(short.correction.item()),
+            float(long.correction.item()),
+            places=6,
+        )
+
 
 class CounterfactualTargetTests(unittest.TestCase):
     def test_replacement_marks_only_after_text_change(self):
@@ -99,6 +126,16 @@ class CounterfactualTargetTests(unittest.TestCase):
         )
         self.assertEqual(sum(value > 0 for value in targets), 1)
         self.assertEqual(max(targets), 1.0)
+
+    def test_balanced_localization_is_not_dominated_by_easy_negatives(self):
+        logits = torch.full((1, 101), -4.0)
+        targets = torch.zeros_like(logits)
+        targets[0, 0] = 1.0
+        mask = torch.ones_like(logits)
+
+        loss = balanced_binary_localization_loss(logits, targets, mask)
+
+        self.assertGreater(float(loss.item()), 1.0)
 
 
 class PairedTrainingDataTests(unittest.TestCase):
@@ -189,6 +226,10 @@ class PairedTrainingDataTests(unittest.TestCase):
         self.assertEqual(batch["adversarial_input_ids"].shape[0], 1)
         self.assertEqual(batch["adversarial_indices"].tolist(), [1])
         self.assertGreater(float(batch["uplift_targets"].sum()), 0.0)
+        self.assertAlmostEqual(
+            float(batch["cumulative_deltas"][0].item()),
+            0.1,
+        )
 
 
 class CheckpointBudgetTests(unittest.TestCase):

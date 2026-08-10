@@ -14,6 +14,12 @@ import torch
 from text_scoring_adv_training.evaluation.aes.attacks.rudimentary import (
     IterativeRudimentaryAttack,
 )
+from text_scoring_adv_training.evaluation.aes.attacks.injection import (
+    IterativeInjectionAttack,
+)
+from text_scoring_adv_training.evaluation.aes.run_attacks import (
+    build_injection_family_summary,
+)
 from text_scoring_adv_training.evaluation.aes.attacks.mlm_guided import (
     CachedMLMTrainingCandidateGenerator,
     MLMGuidedAttack,
@@ -172,6 +178,7 @@ class AESRudimentaryAttackTest(unittest.TestCase):
         self.assertEqual(history[-1]["accepted_edit_count"], 2)
         self.assertEqual(history[-1]["max_edits"], 2)
 
+
     def test_edit_budget_limits_accepted_operations(self):
         scorer = _FakeAttackScorer(
             {
@@ -246,6 +253,77 @@ class AESRudimentaryAttackTest(unittest.TestCase):
 
         self.assertEqual(perturbed, "original")
         self.assertEqual(history, [])
+
+
+class AESInjectionAttackTest(unittest.TestCase):
+    @staticmethod
+    def _candidate(text: str) -> dict:
+        return {
+            "text": text,
+            "injected_sentence": "injected sentence.",
+            "source_index": None,
+            "destination_index": 0,
+        }
+
+    def test_iterative_search_uses_scores_and_stops_at_threshold(self):
+        scorer = _FakeAttackScorer(
+            {
+                "original": 1.0,
+                "edit-one": 1.06,
+                "edit-two": 1.12,
+            },
+            token_count=20,
+        )
+        attack = IterativeInjectionAttack(
+            scorer,
+            mode="external",
+            sentence_bank=["external sentence."],
+            n_steps=30,
+            candidates_per_step=16,
+            batch_size=4,
+            threshold=0.1,
+        )
+
+        with patch.object(
+            attack,
+            "build_candidates",
+            side_effect=[
+                [self._candidate("edit-one")],
+                [self._candidate("edit-two")],
+            ],
+        ):
+            perturbed, history = attack.attack("original")
+
+        self.assertEqual(perturbed, "edit-two")
+        self.assertEqual(len(history), 2)
+        self.assertAlmostEqual(history[-1]["delta"], 0.12)
+        self.assertEqual(history[-1]["accepted_injection_count"], 2)
+
+    def test_family_summary_is_equal_weight_not_subattack_count_weighted(self):
+        summary = build_injection_family_summary(
+            [
+                {
+                    "attack": "injection_external",
+                    "asr": 0.8,
+                    "avg_delta": 0.2,
+                    "band_asr": 0.1,
+                    "upward_band_asr": 0.1,
+                },
+                {
+                    "attack": "injection_self_dup",
+                    "asr": 0.4,
+                    "avg_delta": 0.1,
+                    "band_asr": 0.05,
+                    "upward_band_asr": 0.05,
+                },
+            ],
+            n_essays=1154,
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["asr"], 0.6)
+        self.assertEqual(summary["avg_delta"], 0.15)
+        self.assertEqual(summary["n_essays_per_subattack"], 1154)
 
 
 class AESMLMGuidedAttackTest(unittest.TestCase):

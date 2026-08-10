@@ -14,10 +14,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIXED_AT_RH = "mixed_at_rh"
 PAER_RH = "paer_rh"
+PAER_RH_V2 = "paer_rh_v2"
 
 
 def build_parser(training_mode: str) -> argparse.ArgumentParser:
-    if training_mode not in (MIXED_AT_RH, PAER_RH):
+    if training_mode not in (MIXED_AT_RH, PAER_RH, PAER_RH_V2):
         raise ValueError(training_mode)
     parser = argparse.ArgumentParser(
         description=f"Train {training_mode} on shared offline RH traces."
@@ -47,9 +48,12 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         type=Path,
         default=REPO_ROOT / "data" / "valid_fold0.csv",
     )
-    default_name = (
-        "aes_paer_rh_seed42" if training_mode == PAER_RH else "aes_mixed_at_rh_seed42"
-    )
+    default_names = {
+        MIXED_AT_RH: "aes_mixed_at_rh_seed42",
+        PAER_RH: "aes_paer_rh_seed42",
+        PAER_RH_V2: "aes_paer_rh_v2_seed42",
+    }
+    default_name = default_names[training_mode]
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -57,6 +61,7 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     )
     parser.add_argument("--num-epochs", type=int, default=3)
     parser.add_argument("--per-device-train-batch-size", type=int, default=4)
+    parser.add_argument("--per-device-eval-batch-size", type=int, default=4)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
@@ -80,6 +85,13 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--localization-positive-weight", type=float, default=8.0)
     parser.add_argument("--attribution-gain-scale", type=float, default=0.1)
     parser.add_argument("--correction-scale", type=float, default=1.0)
+    parser.add_argument("--paer-head-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--correction-calibration-weight", type=float, default=1.0)
+    parser.add_argument("--clean-correction-weight", type=float, default=1.0)
+    parser.add_argument("--correction-loss-beta", type=float, default=0.02)
+    parser.add_argument("--max-correction-target", type=float, default=1.0)
+    parser.add_argument("--routing-top-k", type=int, default=8)
+    parser.add_argument("--routing-risk-bias-init", type=float, default=-5.0)
     parser.add_argument("--max-trace-records", type=int, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument("--no-progress", action="store_true")
@@ -98,6 +110,7 @@ def build_config(args: argparse.Namespace, training_mode: str) -> dict:
         "output_dir": str(args.output_dir),
         "num_epochs": args.num_epochs,
         "per_device_train_batch_size": args.per_device_train_batch_size,
+        "per_device_eval_batch_size": args.per_device_eval_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "learning_rate": args.learning_rate,
         "weight_decay": args.weight_decay,
@@ -119,6 +132,13 @@ def build_config(args: argparse.Namespace, training_mode: str) -> dict:
         "localization_positive_weight": args.localization_positive_weight,
         "attribution_gain_scale": args.attribution_gain_scale,
         "correction_scale": args.correction_scale,
+        "paer_head_learning_rate": args.paer_head_learning_rate,
+        "correction_calibration_weight": args.correction_calibration_weight,
+        "clean_correction_weight": args.clean_correction_weight,
+        "correction_loss_beta": args.correction_loss_beta,
+        "max_correction_target": args.max_correction_target,
+        "routing_top_k": args.routing_top_k,
+        "routing_risk_bias_init": args.routing_risk_bias_init,
         "show_progress": not args.no_progress,
         "max_trace_records": args.max_trace_records,
         "max_train_samples": args.max_train_samples,

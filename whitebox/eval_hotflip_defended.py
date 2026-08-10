@@ -52,15 +52,23 @@ def _configure_environment(args: argparse.Namespace) -> None:
     os.environ["HF_HOME"] = str(args.hf_home)
 
 
+INJECTION_ATTACKS = (
+    "injection",
+    "injection_external",
+    "injection_self_dup",
+    "injection_family",
+)
+
+
 def build_parser(default_attack: str = "hotflip") -> argparse.ArgumentParser:
-    if default_attack not in ("hotflip", "rudimentary", "mlm_guided"):
+    if default_attack not in ("hotflip", "rudimentary", "mlm_guided", *INJECTION_ATTACKS):
         raise ValueError(f"Unsupported default attack: {default_attack}")
     parser = argparse.ArgumentParser(
         description="Evaluate clean QWK/MAE and adversarial ASR for an AES checkpoint."
     )
     parser.add_argument(
         "--attack",
-        choices=("hotflip", "rudimentary", "mlm_guided"),
+        choices=("hotflip", "rudimentary", "mlm_guided", *INJECTION_ATTACKS),
         default=default_attack,
         help=f"Attack evaluated after clean metrics (default: {default_attack}).",
     )
@@ -102,6 +110,11 @@ def build_parser(default_attack: str = "hotflip") -> argparse.ArgumentParser:
     parser.add_argument("--top-k-per-pos", type=int, default=2)
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
+    parser.add_argument(
+        "--injection-sentence-bank",
+        type=Path,
+        default=REPO_ROOT / "injection" / "wikipedia_sentences_100.txt",
+    )
     parser.add_argument("--mlm-max-token-edit-rate", type=float, default=0.05)
     parser.add_argument("--mlm-model-name", default="answerdotai/ModernBERT-large")
     parser.add_argument(
@@ -349,6 +362,8 @@ def _attack_command(args: argparse.Namespace) -> list[str]:
         str(args.max_candidates_per_step),
         "--max-token-edit-rate",
         str(args.max_token_edit_rate),
+        "--injection-sentence-bank",
+        str(args.injection_sentence_bank.resolve()),
         "--mlm-max-token-edit-rate",
         str(args.mlm_max_token_edit_rate),
         "--mlm-model-name",
@@ -416,6 +431,7 @@ def main(default_attack: str = "hotflip") -> int:
                 "top_k_per_pos": args.top_k_per_pos,
                 "max_candidates_per_step": args.max_candidates_per_step,
                 "max_token_edit_rate": args.max_token_edit_rate,
+                "injection_sentence_bank": str(args.injection_sentence_bank),
                 "mlm_max_token_edit_rate": args.mlm_max_token_edit_rate,
                 "mlm_model_name": args.mlm_model_name,
                 "similarity_model_name": args.similarity_model_name,

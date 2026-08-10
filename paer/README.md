@@ -154,6 +154,34 @@ python .\paer\analyze_aes_paer_routing_contribution.py `
   --batch-size 4 --dtype float32
 ```
 
+### 5.2 PAER-v2 after a collapsed v1 routing diagnostic
+
+PAER-v1 is retained for reproducibility.  If its adversarial correction does
+not exceed its clean correction, train the separately named v2 entrypoint.
+V2 reuses the exact same RH trace file and B0 initialization.  It changes only
+the PAER module/training: balanced edited-vs-unchanged localization, direct
+calibration to the stored cumulative victim-score inflation, sparse top-k sum
+routing, and a separate learning rate for the randomly initialized heads.
+MLM remains excluded.
+
+```powershell
+python .\paer\run_aes_paer_rh_v2_training.py `
+  --seed 42 `
+  --trace-jsonl .\artifacts\paer\rh_counterfactual_training_traces_seed42.jsonl `
+  --output-dir .\outputs\aes_paer_rh_v2_seed42 `
+  --dry-run
+
+python .\paer\run_aes_paer_rh_v2_training.py `
+  --seed 42 `
+  --trace-jsonl .\artifacts\paer\rh_counterfactual_training_traces_seed42.jsonl `
+  --output-dir .\outputs\aes_paer_rh_v2_seed42
+
+python .\paer\select_aes_rh_checkpoint.py `
+  --defense-output-dir .\outputs\aes_paer_rh_v2_seed42 `
+  --selection-output-dir .\outputs\aes_paer_rh_v2_checkpoint_selection_seed42 `
+  --max-checkpoint-step 1400 --batch-size 4 --dtype float32
+```
+
 ### 6. Freeze the method, then run MLM once
 
 Do not change architecture, weights, loss coefficients, or checkpoint after

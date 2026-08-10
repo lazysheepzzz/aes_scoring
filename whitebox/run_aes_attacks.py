@@ -29,7 +29,16 @@ REPO_ROOT = (
     else SCRIPT_REPO_ROOT
 )
 ON_SERVER = SERVER_ROOT.exists()
-ATTACKS = ("rudimentary", "injection", "hotflip", "mlm_guided", "all")
+ATTACKS = (
+    "rudimentary",
+    "injection",
+    "injection_external",
+    "injection_self_dup",
+    "injection_family",
+    "hotflip",
+    "mlm_guided",
+    "all",
+)
 
 
 def _default_path(server_path: str, local_path: Path) -> Path:
@@ -113,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k-per-pos", type=int, default=2)
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
+    parser.add_argument(
+        "--injection-sentence-bank",
+        type=Path,
+        default=REPO_ROOT / "injection" / "wikipedia_sentences_100.txt",
+    )
     parser.add_argument("--mlm-max-token-edit-rate", type=float, default=0.05)
     parser.add_argument("--mlm-model-name", default="answerdotai/ModernBERT-large")
     parser.add_argument(
@@ -216,6 +230,8 @@ def build_command(args: argparse.Namespace) -> list[str]:
         str(args.max_candidates_per_step),
         "--max-token-edit-rate",
         str(args.max_token_edit_rate),
+        "--injection-sentence-bank",
+        str(args.injection_sentence_bank),
         "--mlm-max-token-edit-rate",
         str(args.mlm_max_token_edit_rate),
         "--mlm-model-name",

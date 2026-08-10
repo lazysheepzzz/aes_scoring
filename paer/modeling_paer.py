@@ -23,6 +23,7 @@ from transformers.utils import ModelOutput
 
 PAER_CONFIG_NAME = "paer_config.json"
 PAER_HEADS_NAME = "paer_heads.pt"
+ROUTING_AGGREGATIONS = ("mean", "topk_sum")
 
 
 @dataclass
@@ -48,15 +49,25 @@ class PAERForEssayScoring(nn.Module):
         correction_scale: float = 1.0,
         risk_bias_init: float = -4.0,
         evidence_bias_init: float = -2.0,
+        routing_aggregation: str = "mean",
+        routing_top_k: int = 8,
     ):
         super().__init__()
         if correction_scale < 0:
             raise ValueError("correction_scale must be non-negative")
+        if routing_aggregation not in ROUTING_AGGREGATIONS:
+            raise ValueError(
+                f"Unknown routing_aggregation: {routing_aggregation}"
+            )
+        if routing_top_k <= 0:
+            raise ValueError("routing_top_k must be greater than zero")
         hidden_size = int(base_model.config.hidden_size)
         self.base_model = base_model
         self.risk_head = nn.Linear(hidden_size, 1)
         self.positive_evidence_head = nn.Linear(hidden_size, 1)
         self.correction_scale = float(correction_scale)
+        self.routing_aggregation = routing_aggregation
+        self.routing_top_k = int(routing_top_k)
 
         nn.init.zeros_(self.risk_head.weight)
         nn.init.constant_(self.risk_head.bias, risk_bias_init)
@@ -150,10 +161,21 @@ class PAERForEssayScoring(nn.Module):
         routed_positive_evidence = (
             torch.sigmoid(risk_logits) * positive_evidence * content_mask
         )
-        denominator = content_mask.sum(dim=1).clamp_min(1.0)
-        correction = (
-            routed_positive_evidence.sum(dim=1) / denominator
-        ) * self.correction_scale
+        if self.routing_aggregation == "mean":
+            denominator = content_mask.sum(dim=1).clamp_min(1.0)
+            correction = routed_positive_evidence.sum(dim=1) / denominator
+        else:
+            # Inflation traces are sparse.  Summing the strongest routed
+            # evidence avoids diluting one edited token by a 1024-token essay,
+            # while top-k prevents diffuse low-risk evidence from growing with
+            # document length.
+            k = min(self.routing_top_k, routed_positive_evidence.shape[1])
+            correction = torch.topk(
+                routed_positive_evidence,
+                k=k,
+                dim=1,
+            ).values.sum(dim=1)
+        correction = correction * self.correction_scale
         logits = base_logits - correction.unsqueeze(-1).to(base_logits.dtype)
 
         hidden_states = (token_states,) if output_hidden_states else None
@@ -176,6 +198,10 @@ class PAERForEssayScoring(nn.Module):
         *,
         dtype: torch.dtype = torch.float32,
         correction_scale: float = 1.0,
+        risk_bias_init: float = -4.0,
+        evidence_bias_init: float = -2.0,
+        routing_aggregation: str = "mean",
+        routing_top_k: int = 8,
     ) -> "PAERForEssayScoring":
         checkpoint_path = Path(checkpoint_path)
         config = AutoConfig.from_pretrained(
@@ -188,7 +214,14 @@ class PAERForEssayScoring(nn.Module):
             torch_dtype=dtype,
             trust_remote_code=True,
         )
-        return cls(base_model, correction_scale=correction_scale)
+        return cls(
+            base_model,
+            correction_scale=correction_scale,
+            risk_bias_init=risk_bias_init,
+            evidence_bias_init=evidence_bias_init,
+            routing_aggregation=routing_aggregation,
+            routing_top_k=routing_top_k,
+        )
 
     @classmethod
     def from_pretrained(
@@ -205,6 +238,10 @@ class PAERForEssayScoring(nn.Module):
             checkpoint_path,
             dtype=dtype,
             correction_scale=float(paer_config["correction_scale"]),
+            routing_aggregation=str(
+                paer_config.get("routing_aggregation", "mean")
+            ),
+            routing_top_k=int(paer_config.get("routing_top_k", 8)),
         )
         try:
             state = torch.load(
@@ -238,8 +275,10 @@ class PAERForEssayScoring(nn.Module):
             json.dumps(
                 {
                     "model_type": "paer_aes",
-                    "version": 1,
+                    "version": 2,
                     "correction_scale": self.correction_scale,
+                    "routing_aggregation": self.routing_aggregation,
+                    "routing_top_k": self.routing_top_k,
                     "directional_routing": (
                         "subtract predicted suspicious positive evidence only"
                     ),
