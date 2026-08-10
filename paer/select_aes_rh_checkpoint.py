@@ -46,7 +46,50 @@ def build_parser():
         type=int,
         default=30,
     )
+    parser.add_argument(
+        "--max-checkpoint-step",
+        type=int,
+        default=1400,
+        help=(
+            "Maximum explicit gstep checkpoint eligible for selection. "
+            "best/final aliases are excluded when this cap is active because "
+            "their training step is not encoded in the directory name. Use "
+            "0 only when every completed checkpoint may be compared."
+        ),
+    )
     return parser
+
+
+def restrict_candidates_to_common_budget(
+    candidates: list[Path],
+    max_checkpoint_step: int,
+) -> tuple[list[Path], list[str]]:
+    """Keep only unambiguous checkpoints within a shared training budget."""
+    if max_checkpoint_step < 0:
+        raise ValueError("max_checkpoint_step must be zero or greater")
+    if max_checkpoint_step == 0:
+        return candidates, []
+
+    eligible: list[Path] = []
+    excluded: list[str] = []
+    for checkpoint in candidates:
+        name = checkpoint.name
+        if name.startswith("gstep") and name[5:].isdigit():
+            if int(name[5:]) <= max_checkpoint_step:
+                eligible.append(checkpoint)
+            else:
+                excluded.append(name)
+        else:
+            # The alias may have been written after the common budget. Without
+            # saved-step metadata, accepting it would make the protocol
+            # impossible to audit.
+            excluded.append(name)
+    if not eligible:
+        raise RuntimeError(
+            "No explicit gstep checkpoint is within max_checkpoint_step="
+            f"{max_checkpoint_step}"
+        )
+    return eligible, excluded
 
 
 def _run_attack_subset(
@@ -86,8 +129,16 @@ def main() -> int:
         raise FileNotFoundError(f"C0 checkpoint not found: {args.c0_checkpoint}")
     if not args.valid_csv.is_file():
         raise FileNotFoundError(f"Validation CSV not found: {args.valid_csv}")
-    candidates = discover_checkpoint_candidates(args.defense_output_dir)
-    print(f"[CANDIDATES] {len(candidates)} checkpoints", flush=True)
+    discovered = discover_checkpoint_candidates(args.defense_output_dir)
+    candidates, excluded_candidates = restrict_candidates_to_common_budget(
+        discovered,
+        args.max_checkpoint_step,
+    )
+    print(
+        f"[CANDIDATES] {len(candidates)} eligible checkpoints; "
+        f"excluded={excluded_candidates}",
+        flush=True,
+    )
 
     subset_csv = args.selection_output_dir / f"debug_subset_{args.subset_size}.csv"
     if not args.dry_run:
@@ -187,6 +238,9 @@ def main() -> int:
             "attack_seed": args.seed,
             "hotflip_selection_steps": args.selection_steps,
             "rudimentary_selection_steps": args.rudimentary_selection_steps,
+            "max_checkpoint_step": args.max_checkpoint_step or None,
+            "explicit_gstep_only": bool(args.max_checkpoint_step),
+            "excluded_checkpoint_names": excluded_candidates,
         },
         "selected_checkpoint": selected,
         "candidates": rows,
@@ -203,6 +257,7 @@ def main() -> int:
         "hotflip_subset_asr": selected["hotflip_subset_asr"],
         "rh_macro_subset_asr": selected["rh_macro_subset_asr"],
         "mlm_used_for_selection": False,
+        "max_checkpoint_step": args.max_checkpoint_step or None,
     }
     best_path = args.selection_output_dir / "best_checkpoint.json"
     best_path.write_text(

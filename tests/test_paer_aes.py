@@ -15,6 +15,7 @@ from paer.aes_rh_trainer import (
     changed_token_uplift_targets,
 )
 from paer.modeling_paer import PAERForEssayScoring
+from paer.select_aes_rh_checkpoint import restrict_candidates_to_common_budget
 
 
 class _FakeEncoder(nn.Module):
@@ -187,6 +188,28 @@ class PairedTrainingDataTests(unittest.TestCase):
         self.assertEqual(batch["adversarial_input_ids"].shape[0], 1)
         self.assertEqual(batch["adversarial_indices"].tolist(), [1])
         self.assertGreater(float(batch["uplift_targets"].sum()), 0.0)
+
+
+class CheckpointBudgetTests(unittest.TestCase):
+    def test_common_budget_keeps_only_explicit_steps_at_or_below_cap(self):
+        candidates = [
+            Path("gstep200"),
+            Path("gstep1400"),
+            Path("gstep1600"),
+            Path("best"),
+            Path("final"),
+        ]
+        eligible, excluded = restrict_candidates_to_common_budget(candidates, 1400)
+
+        self.assertEqual([path.name for path in eligible], ["gstep200", "gstep1400"])
+        self.assertEqual(excluded, ["gstep1600", "best", "final"])
+
+    def test_zero_budget_cap_preserves_all_candidates(self):
+        candidates = [Path("gstep200"), Path("best"), Path("final")]
+        eligible, excluded = restrict_candidates_to_common_budget(candidates, 0)
+
+        self.assertEqual(eligible, candidates)
+        self.assertEqual(excluded, [])
 
 
 if __name__ == "__main__":

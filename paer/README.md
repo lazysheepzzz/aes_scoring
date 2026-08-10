@@ -88,16 +88,21 @@ python .\paer\run_aes_paer_rh_training.py `
 ### 4. Select checkpoints without MLM leakage
 
 Run once for Mixed-AT and once for PAER.  The selector uses the same fixed
-validation subset and evaluates both training attacks.
+validation subset and evaluates both training attacks.  The formal comparison
+uses explicit checkpoints up to `gstep1400`, the last common saved training
+budget available for both runs.  `best` and `final` aliases are deliberately
+excluded because their step is not encoded in the directory name.
 
 ```powershell
 python .\paer\select_aes_rh_checkpoint.py `
   --defense-output-dir .\outputs\aes_mixed_at_rh_seed42 `
-  --selection-output-dir .\outputs\aes_mixed_at_rh_checkpoint_selection_seed42
+  --selection-output-dir .\outputs\aes_mixed_at_rh_checkpoint_selection_seed42 `
+  --max-checkpoint-step 1400
 
 python .\paer\select_aes_rh_checkpoint.py `
   --defense-output-dir .\outputs\aes_paer_rh_seed42 `
-  --selection-output-dir .\outputs\aes_paer_rh_checkpoint_selection_seed42
+  --selection-output-dir .\outputs\aes_paer_rh_checkpoint_selection_seed42 `
+  --max-checkpoint-step 1400
 ```
 
 Read the selected path:
