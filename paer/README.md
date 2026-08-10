@@ -138,6 +138,22 @@ python .\whitebox\evaluate_aes_checkpoint.py `
 
 Repeat the two commands with `$mixed` for the Mixed-AT baseline.
 
+### 5.1 Diagnose PAER routing contribution without regenerating attacks
+
+Before freezing the method, replay the saved PAER adversarial texts through
+both the routed score and its uncorrected base branch.  This is a cheap
+fixed-adversarial-set diagnostic, not an adaptive route-off attack.
+
+```powershell
+python .\paer\analyze_aes_paer_routing_contribution.py `
+  --checkpoint $paer `
+  --attack-details `
+    .\outputs\eval_rudimentary_paer_rh_seed42\rudimentary_details.json `
+    .\outputs\eval_hotflip_paer_rh_seed42\hotflip_details.json `
+  --out .\outputs\aes_paer_rh_routing_diagnostic_seed42.json `
+  --batch-size 4 --dtype float32
+```
+
 ### 6. Freeze the method, then run MLM once
 
 Do not change architecture, weights, loss coefficients, or checkpoint after
