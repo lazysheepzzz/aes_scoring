@@ -34,6 +34,7 @@ from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.training.aes_trainer import (
     AESAdversarialConfig,
     build_adamw_parameter_groups,
+    injection_squared_hinge_loss,
     one_sided_score_inflation_loss,
     quality_preserving_mlm_loss,
     run_mlm_guided_one_row,
@@ -45,6 +46,7 @@ from whitebox.aes_stage2_training_launcher import (
     HOTFLIP_DEFENSE,
     RUDIMENTARY_DEFENSE,
     MLM_GUIDED_DEFENSE,
+    INJECTION_DEFENSE,
     build_config,
     build_parser,
 )
@@ -536,11 +538,22 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         config = AESAdversarialConfig(hotflip_margin=0.1)
         self.assertEqual(config.hotflip_tolerance, 0.1)
 
+    def test_injection_squared_hinge_is_directional(self):
+        clean = torch.tensor([1.0, 1.0], requires_grad=True)
+        injected = torch.tensor([1.2, 0.7], requires_grad=True)
+        loss = injection_squared_hinge_loss(clean, injected)
+        self.assertAlmostEqual(float(loss.item()), 0.02, places=6)
+        loss.backward()
+        self.assertIsNone(clean.grad)
+        self.assertGreater(float(injected.grad[0]), 0.0)
+        self.assertEqual(float(injected.grad[1]), 0.0)
+
     def test_c0_and_defenses_share_all_optimization_parameters(self):
         clean_args = build_parser(CLEAN_CONTINUATION).parse_args([])
         hotflip_args = build_parser(HOTFLIP_DEFENSE).parse_args([])
         rudimentary_args = build_parser(RUDIMENTARY_DEFENSE).parse_args([])
         mlm_args = build_parser(MLM_GUIDED_DEFENSE).parse_args([])
+        injection_args = build_parser(INJECTION_DEFENSE).parse_args([])
         clean_config = build_config(clean_args, CLEAN_CONTINUATION)
         hotflip_config = build_config(hotflip_args, HOTFLIP_DEFENSE)
         rudimentary_config = build_config(
@@ -548,6 +561,10 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
             RUDIMENTARY_DEFENSE,
         )
         mlm_config = build_config(mlm_args, MLM_GUIDED_DEFENSE)
+        injection_config = build_config(
+            injection_args,
+            INJECTION_DEFENSE,
+        )
 
         intentionally_different = {
             "training_mode",
@@ -555,6 +572,7 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
             "use_hotflip_swaps",
             "use_rudimentary_edits",
             "use_mlm_guided",
+            "use_injection",
         }
         shared_keys = set(clean_config) - intentionally_different
         self.assertEqual(shared_keys, set(hotflip_config) - intentionally_different)
@@ -587,6 +605,19 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
         self.assertFalse(mlm_config["use_hotflip_swaps"])
         self.assertFalse(mlm_config["use_rudimentary_edits"])
         self.assertTrue(mlm_config["use_mlm_guided"])
+        self.assertTrue(injection_config["use_injection"])
+        self.assertFalse(injection_config["use_hotflip_swaps"])
+        self.assertFalse(injection_config["use_rudimentary_edits"])
+        self.assertFalse(injection_config["use_mlm_guided"])
+        self.assertEqual(injection_config["per_device_train_batch_size"], 2)
+        self.assertEqual(injection_config["gradient_accumulation_steps"], 16)
+        self.assertEqual(injection_config["per_device_eval_batch_size"], 4)
+        self.assertEqual(
+            injection_config["per_device_train_batch_size"]
+            * injection_config["gradient_accumulation_steps"],
+            clean_config["per_device_train_batch_size"]
+            * clean_config["gradient_accumulation_steps"],
+        )
         self.assertEqual(clean_config["precision"], "bfloat16")
         self.assertEqual(rudimentary_config["rudimentary_tolerance"], 0.0)
         self.assertEqual(

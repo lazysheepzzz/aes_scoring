@@ -79,6 +79,12 @@ def load_injection_sentence_bank(path: str | Path) -> list[str]:
     return sentences
 
 
+def injection_sentence_bank_content_sha256(path: str | Path) -> str:
+    """Hash normalized sentence content, independent of CRLF/LF checkout."""
+    sentences = load_injection_sentence_bank(path)
+    return hashlib.sha256("\n".join(sentences).encode("utf-8")).hexdigest()
+
+
 def build_injection_family_summary(
     rows: list[dict],
     *,
@@ -425,6 +431,11 @@ def run(args):
             "success_threshold": args.success_threshold,
             "sentence_bank": str(Path(args.injection_sentence_bank).resolve()),
             "sentence_bank_sha256": _sha256(Path(args.injection_sentence_bank)),
+            "sentence_bank_content_sha256": (
+                injection_sentence_bank_content_sha256(
+                    args.injection_sentence_bank
+                )
+            ),
             "candidate_grid": "up_to_4_sentences_x_4_destinations",
             "acceptance": "strict_score_improvement",
             "token_edit_rate_cap": None,
@@ -435,6 +446,11 @@ def run(args):
             "success_threshold": args.success_threshold,
             "sentence_bank": str(Path(args.injection_sentence_bank).resolve()),
             "sentence_bank_sha256": _sha256(Path(args.injection_sentence_bank)),
+            "sentence_bank_content_sha256": (
+                injection_sentence_bank_content_sha256(
+                    args.injection_sentence_bank
+                )
+            ),
             "candidate_grid": "up_to_4_sentences_x_4_destinations",
             "acceptance": "strict_score_improvement",
             "token_edit_rate_cap": None,
@@ -456,6 +472,11 @@ def run(args):
             "success_threshold": args.success_threshold,
             "sentence_bank": str(Path(args.injection_sentence_bank).resolve()),
             "sentence_bank_sha256": _sha256(Path(args.injection_sentence_bank)),
+            "sentence_bank_content_sha256": (
+                injection_sentence_bank_content_sha256(
+                    args.injection_sentence_bank
+                )
+            ),
             "token_edit_rate_cap": None,
         },
     }

@@ -54,6 +54,7 @@ class AESAdversarialConfig:
     output_dir: str = "/root/autodl-tmp/aes_adv_training"
     num_epochs: int = 3
     per_device_train_batch_size: int = 4   # 减小避免OOM
+    per_device_eval_batch_size: Optional[int] = None
     gradient_accumulation_steps: int = 8
     learning_rate: float = 1e-5
     weight_decay: float = 0.01
@@ -104,6 +105,11 @@ class AESAdversarialConfig:
     mlm_candidate_cache: str = (
         "artifacts/mlm_guided/training_candidate_pool_seed42.jsonl"
     )
+    use_injection: bool = False
+    injection_weight: float = 1.0
+    injection_pairs_path: str = (
+        "artifacts/injection/aes_injection_training_pairs_seed42.jsonl"
+    )
 
     def __post_init__(self):
         if self.hotflip_margin is not None:
@@ -113,6 +119,7 @@ class AESAdversarialConfig:
             "hotflip_defense",
             "rudimentary_defense",
             "mlm_guided_defense",
+            "injection_defense",
         ):
             raise ValueError(f"Unknown training_mode: {self.training_mode}")
         if self.precision not in ("bfloat16", "float32"):
@@ -120,6 +127,7 @@ class AESAdversarialConfig:
         expected_hotflip = self.training_mode == "hotflip_defense"
         expected_rudimentary = self.training_mode == "rudimentary_defense"
         expected_mlm = self.training_mode == "mlm_guided_defense"
+        expected_injection = self.training_mode == "injection_defense"
         if self.use_hotflip_swaps != expected_hotflip:
             raise ValueError(
                 "training_mode and use_hotflip_swaps disagree: "
@@ -135,6 +143,18 @@ class AESAdversarialConfig:
                 "training_mode and use_mlm_guided disagree: "
                 f"{self.training_mode=}, {self.use_mlm_guided=}"
             )
+        if self.use_injection != expected_injection:
+            raise ValueError(
+                "training_mode and use_injection disagree: "
+                f"{self.training_mode=}, {self.use_injection=}"
+            )
+        if self.per_device_eval_batch_size is not None:
+            if self.per_device_eval_batch_size <= 0:
+                raise ValueError(
+                    "per_device_eval_batch_size must be greater than zero"
+                )
+        if self.injection_weight < 0:
+            raise ValueError("injection_weight must be non-negative")
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +171,14 @@ class KaggleEssayDataset(Dataset):
         scores = df["score"].tolist()
         if max_samples:
             texts, scores = texts[:max_samples], scores[:max_samples]
-        self.items = [{"text": str(t), "label": float(s) - label_offset}
-                      for t, s in zip(texts, scores)]
+        self.items = [
+            {
+                "text": str(t),
+                "label": float(s) - label_offset,
+                "source_index": index,
+            }
+            for index, (t, s) in enumerate(zip(texts, scores))
+        ]
 
     def __len__(self): return len(self.items)
     def __getitem__(self, idx): return self.items[idx]
@@ -173,7 +199,51 @@ class AESCollator:
             "attention_mask": enc["attention_mask"],
             "labels": labels,
             "texts": texts,
+            "source_indices": [int(b["source_index"]) for b in batch],
         }
+
+
+def load_injection_training_pairs(
+    path: str | Path,
+    dataset: KaggleEssayDataset,
+) -> Dict[int, Dict[str, Any]]:
+    """Load and validate the fixed offline Injection augmentation pool."""
+    pair_path = Path(path)
+    if not pair_path.is_file():
+        raise FileNotFoundError(f"Injection training pairs not found: {pair_path}")
+    pairs: Dict[int, Dict[str, Any]] = {}
+    with pair_path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            source_index = int(record["source_index"])
+            if source_index in pairs:
+                raise ValueError(
+                    f"Duplicate Injection source_index {source_index} at "
+                    f"{pair_path}:{line_number}"
+                )
+            if not 0 <= source_index < len(dataset):
+                raise ValueError(
+                    f"Injection source_index {source_index} is outside the "
+                    f"training dataset at {pair_path}:{line_number}"
+                )
+            original_text = str(record["original_text"])
+            if original_text != dataset.items[source_index]["text"]:
+                raise ValueError(
+                    "Injection pair does not match train_csv at source_index "
+                    f"{source_index}"
+                )
+            adversarial_text = str(record["adversarial_text"])
+            if not adversarial_text or adversarial_text == original_text:
+                raise ValueError(
+                    f"Invalid Injection adversarial text at {pair_path}:"
+                    f"{line_number}"
+                )
+            pairs[source_index] = record
+    if not pairs:
+        raise ValueError(f"Injection training pair file is empty: {pair_path}")
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +279,18 @@ def one_sided_score_inflation_loss(
         adversarial_scores - clean_scores.detach() - tolerance
     ).pow(relative_loss_power)
     return gold_excess.mean() + relative_weight * relative_excess.mean()
+
+
+def injection_squared_hinge_loss(
+    clean_scores: torch.Tensor,
+    injected_scores: torch.Tensor,
+) -> torch.Tensor:
+    """Original-paper Injection objective adapted to scalar AES scores.
+
+    Only an injected score above its paired clean score is penalized.  The
+    clean branch is detached so this term cannot raise the clean prediction.
+    """
+    return torch.relu(injected_scores - clean_scores.detach()).pow(2).mean()
 
 
 def quality_preserving_mlm_loss(
@@ -652,6 +734,23 @@ class AESAdversarialTrainer:
 
         self.train_dataset = KaggleEssayDataset(config.train_csv, self.tokenizer, config.max_length)
         self.valid_dataset = KaggleEssayDataset(config.valid_csv, self.tokenizer, config.max_length)
+        self.injection_pairs: Dict[int, Dict[str, Any]] = {}
+        if config.use_injection:
+            print(
+                f"Loading offline Injection pairs from "
+                f"{config.injection_pairs_path}...",
+                flush=True,
+            )
+            self.injection_pairs = load_injection_training_pairs(
+                config.injection_pairs_path,
+                self.train_dataset,
+            )
+            print(
+                f"Injection pairs: {len(self.injection_pairs)} "
+                f"({len(self.injection_pairs) / len(self.train_dataset):.1%} "
+                "of training essays)",
+                flush=True,
+            )
         if self.mlm_candidate_generator is not None:
             missing_candidate_records = sum(
                 not self.mlm_candidate_generator.has_text(item["text"])
@@ -727,6 +826,8 @@ class AESAdversarialTrainer:
             fraction = cfg.rudimentary_fraction
         elif cfg.use_mlm_guided:
             fraction = cfg.mlm_fraction
+        elif cfg.use_injection:
+            return [True] * batch_size
         else:
             return [False] * batch_size
         n = int(batch_size * fraction)
@@ -736,8 +837,12 @@ class AESAdversarialTrainer:
     @torch.no_grad()
     def evaluate(self) -> Dict[str, float]:
         self.scorer.model.eval()
+        eval_batch_size = (
+            self.config.per_device_eval_batch_size
+            or self.config.per_device_train_batch_size * 4
+        )
         loader = DataLoader(self.valid_dataset,
-                           batch_size=self.config.per_device_train_batch_size * 4,
+                           batch_size=eval_batch_size,
                            shuffle=False, collate_fn=self.collator)
         preds, labels_list = [], []
         for batch in tqdm(
@@ -787,6 +892,7 @@ class AESAdversarialTrainer:
             if selected
         ]
         loss_indices = list(adversarial_indices)
+        adversarial_logits_for_loss: Optional[torch.Tensor] = None
 
         if cfg.use_hotflip_swaps and adversarial_indices:
             # Run hotflip per-row
@@ -810,6 +916,7 @@ class AESAdversarialTrainer:
                     input_ids=hf_ids,
                     attention_mask=b["attention_mask"],
                 ).logits.squeeze(-1)
+            adversarial_logits_for_loss = adv_logits[loss_indices]
         elif cfg.use_rudimentary_edits and adversarial_indices:
             adversarial_texts = list(b["texts"])
             changed_indices: List[int] = []
@@ -852,6 +959,7 @@ class AESAdversarialTrainer:
                     ).logits.squeeze(-1)
             else:
                 adv_logits = clean_logits.detach()
+            adversarial_logits_for_loss = adv_logits[loss_indices]
         elif cfg.use_mlm_guided and adversarial_indices:
             if self.mlm_candidate_generator is None:
                 raise RuntimeError("MLM candidate generator was not initialized")
@@ -892,6 +1000,31 @@ class AESAdversarialTrainer:
                     ).logits.squeeze(-1)
             else:
                 adv_logits = clean_logits.detach()
+            adversarial_logits_for_loss = adv_logits[loss_indices]
+        elif cfg.use_injection:
+            loss_indices = []
+            injected_texts: List[str] = []
+            for index, source_index in enumerate(b["source_indices"]):
+                pair = self.injection_pairs.get(int(source_index))
+                if pair is None:
+                    continue
+                loss_indices.append(index)
+                injected_texts.append(str(pair["adversarial_text"]))
+            if injected_texts:
+                injected_batch = self.tokenizer(
+                    injected_texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=cfg.max_length,
+                    padding=True,
+                )
+                with self._autocast_context():
+                    adversarial_logits_for_loss = self.scorer.model(
+                        input_ids=injected_batch["input_ids"].to(self.device),
+                        attention_mask=injected_batch["attention_mask"].to(
+                            self.device
+                        ),
+                    ).logits.squeeze(-1)
         else:
             adv_logits = clean_logits.detach()
 
@@ -899,11 +1032,19 @@ class AESAdversarialTrainer:
         base_loss = F.mse_loss(clean_logits.float(), labels.float())
 
         if loss_indices:
-            if cfg.use_mlm_guided:
+            if adversarial_logits_for_loss is None:
+                raise RuntimeError("Missing adversarial logits for selected rows")
+            if cfg.use_injection:
+                attack_weight = cfg.injection_weight
+                adversarial_loss = injection_squared_hinge_loss(
+                    clean_logits[loss_indices].float(),
+                    adversarial_logits_for_loss.float(),
+                )
+            elif cfg.use_mlm_guided:
                 attack_weight = cfg.mlm_weight
                 adversarial_loss = quality_preserving_mlm_loss(
                     clean_logits[loss_indices].float(),
-                    adv_logits[loss_indices].float(),
+                    adversarial_logits_for_loss.float(),
                     labels[loss_indices].float(),
                     tolerance=cfg.mlm_tolerance,
                 )
@@ -917,10 +1058,10 @@ class AESAdversarialTrainer:
                 relative_loss_power = (
                     cfg.rudimentary_relative_loss_power
                 )
-            if not cfg.use_mlm_guided:
+            if not cfg.use_mlm_guided and not cfg.use_injection:
                 adversarial_loss = one_sided_score_inflation_loss(
                     clean_logits[loss_indices].float(),
-                    adv_logits[loss_indices].float(),
+                    adversarial_logits_for_loss.float(),
                     labels[loss_indices].float(),
                     tolerance=attack_tolerance,
                     relative_loss_power=relative_loss_power,

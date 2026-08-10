@@ -32,11 +32,13 @@ CLEAN_CONTINUATION = "clean_continuation"
 HOTFLIP_DEFENSE = "hotflip_defense"
 RUDIMENTARY_DEFENSE = "rudimentary_defense"
 MLM_GUIDED_DEFENSE = "mlm_guided_defense"
+INJECTION_DEFENSE = "injection_defense"
 TRAINING_MODES = (
     CLEAN_CONTINUATION,
     HOTFLIP_DEFENSE,
     RUDIMENTARY_DEFENSE,
     MLM_GUIDED_DEFENSE,
+    INJECTION_DEFENSE,
 )
 
 
@@ -99,6 +101,11 @@ def _default_output_dir(training_mode: str) -> Path:
             "/root/autodl-tmp/aes_rudimentary_defense_v2",
             REPO_ROOT / "outputs" / "aes_rudimentary_defense_v2",
         )
+    if training_mode == INJECTION_DEFENSE:
+        return _default_path(
+            "/root/autodl-tmp/aes_injection_defense",
+            REPO_ROOT / "outputs" / "aes_injection_defense",
+        )
     return _default_path(
         "/root/autodl-tmp/aes_mlm_guided_defense_cached",
         REPO_ROOT / "outputs" / "aes_mlm_guided_defense_cached",
@@ -113,6 +120,7 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         HOTFLIP_DEFENSE: "D_HOTFLIP adversarial",
         RUDIMENTARY_DEFENSE: "D_RUDIMENTARY adversarial",
         MLM_GUIDED_DEFENSE: "D_MLM adversarial",
+        INJECTION_DEFENSE: "D_INJECTION adversarial",
     }
     display_name = display_names[training_mode]
     parser = argparse.ArgumentParser(
@@ -150,8 +158,22 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
 
     # Parameters shared by C0 and every stage-two defense.
     parser.add_argument("--num-epochs", type=int, default=3)
-    parser.add_argument("--per-device-train-batch-size", type=int, default=4)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument(
+        "--per-device-train-batch-size",
+        type=int,
+        default=2 if training_mode == INJECTION_DEFENSE else 4,
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=16 if training_mode == INJECTION_DEFENSE else 8,
+    )
+    parser.add_argument(
+        "--per-device-eval-batch-size",
+        type=int,
+        default=4 if training_mode == INJECTION_DEFENSE else None,
+        help="Explicit validation microbatch; legacy modes keep their prior default.",
+    )
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--warmup-ratio", type=float, default=0.1)
@@ -252,6 +274,18 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         ),
         help="Offline semantic MLM candidate pool prepared before D_MLM training.",
     )
+    parser.add_argument("--injection-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--injection-pairs",
+        type=Path,
+        default=(
+            REPO_ROOT
+            / "artifacts"
+            / "injection"
+            / "aes_injection_training_pairs_seed42.jsonl"
+        ),
+        help="Fixed offline external/self-duplication training pairs.",
+    )
 
     parser.add_argument(
         "--hf-home",
@@ -290,6 +324,7 @@ def build_config(
         "output_dir": str(args.output_dir),
         "num_epochs": args.num_epochs,
         "per_device_train_batch_size": args.per_device_train_batch_size,
+        "per_device_eval_batch_size": args.per_device_eval_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "learning_rate": args.learning_rate,
         "weight_decay": args.weight_decay,
@@ -309,6 +344,7 @@ def build_config(
             training_mode == RUDIMENTARY_DEFENSE
         ),
         "use_mlm_guided": training_mode == MLM_GUIDED_DEFENSE,
+        "use_injection": training_mode == INJECTION_DEFENSE,
         "hotflip_weight": args.hotflip_weight,
         "hotflip_n_sample_pos": args.hotflip_n_sample_pos,
         "hotflip_top_k_per_pos": args.hotflip_top_k_per_pos,
@@ -345,6 +381,8 @@ def build_config(
         ),
         "mlm_max_length": args.mlm_max_length,
         "mlm_candidate_cache": str(args.mlm_candidate_cache),
+        "injection_weight": args.injection_weight,
+        "injection_pairs_path": str(args.injection_pairs),
     }
 
 
@@ -410,6 +448,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("mlm_tolerance must be non-negative")
     if config["mlm_improvement_tolerance"] < 0:
         raise ValueError("mlm_improvement_tolerance must be non-negative")
+    if config["injection_weight"] < 0:
+        raise ValueError("injection_weight must be non-negative")
     if not -1.0 <= config["mlm_minimum_cosine_similarity"] <= 1.0:
         raise ValueError("mlm_minimum_cosine_similarity must be in [-1, 1]")
     if not 0.0 < config["adam_beta1"] < 1.0:
@@ -459,6 +499,12 @@ def main(training_mode: str) -> int:
             "MLM training candidate cache not found: "
             f"{args.mlm_candidate_cache}. Run "
             "mlm_guided/prepare_aes_mlm_training_candidates.py first."
+        )
+    if training_mode == INJECTION_DEFENSE and not args.injection_pairs.is_file():
+        raise FileNotFoundError(
+            "Injection training pairs not found: "
+            f"{args.injection_pairs}. Run "
+            "injection/prepare_aes_injection_training_pairs.py first."
         )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

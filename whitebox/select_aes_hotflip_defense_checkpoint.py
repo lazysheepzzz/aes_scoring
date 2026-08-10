@@ -27,7 +27,12 @@ from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ENTRYPOINT = REPO_ROOT / "whitebox" / "evaluate_aes_checkpoint.py"
-SUPPORTED_ATTACKS = ("hotflip", "rudimentary", "mlm_guided")
+SUPPORTED_ATTACKS = (
+    "hotflip",
+    "rudimentary",
+    "mlm_guided",
+    "injection_family",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -286,7 +291,14 @@ def _load_clean_qwk(path: Path) -> float:
     return float(payload.get("rounded_qwk", payload["qwk"]))
 
 
-def _load_subset_summary(path: Path) -> dict[str, Any]:
+def _load_subset_summary(path: Path, attack: str) -> dict[str, Any]:
+    if attack == "injection_family":
+        payload = json.loads(
+            path.with_name("injection_family_summary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        return payload
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list) or len(payload) != 1:
         raise ValueError(f"Expected one attack summary in {path}")
@@ -355,6 +367,8 @@ def _base_evaluation_command(
             str(args.mlm_max_length),
             "--mlm-dtype",
             args.mlm_dtype,
+            "--injection-sentence-bank",
+            str(args.injection_sentence_bank.resolve()),
         ]
     )
     return command
@@ -388,7 +402,11 @@ def _evaluate_subset_if_needed(
     out_dir: Path,
     args: argparse.Namespace,
 ) -> None:
-    result_path = out_dir / "asr_summary.json"
+    result_path = (
+        out_dir / "injection_family_summary.json"
+        if args.attack == "injection_family"
+        else out_dir / "asr_summary.json"
+    )
     if result_path.is_file() and not args.force:
         print(f"[REUSE] {result_path}", flush=True)
         return
@@ -429,11 +447,13 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
         "hotflip": "aes_hotflip_defense_seed42",
         "rudimentary": "aes_rudimentary_defense_v2_seed42",
         "mlm_guided": "aes_mlm_guided_defense_batched_seed42",
+        "injection_family": "aes_injection_defense_seed42",
     }
     selection_names = {
         "hotflip": "aes_hotflip_checkpoint_selection_seed42",
         "rudimentary": "aes_rudimentary_defense_v2_checkpoint_selection_seed42",
         "mlm_guided": "aes_mlm_guided_checkpoint_selection_seed42",
+        "injection_family": "aes_injection_checkpoint_selection_seed42",
     }
     defense_name = defense_names[attack]
     selection_name = selection_names[attack]
@@ -495,7 +515,7 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
     parser.add_argument(
         "--selection-steps",
         type=int,
-        default=10 if attack == "hotflip" else 30,
+        default=10 if attack in {"hotflip", "injection_family"} else 30,
     )
     parser.add_argument("--success-threshold", type=float, default=0.1)
     parser.add_argument("--beam-size", type=int, default=1)
@@ -503,6 +523,11 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
     parser.add_argument("--top-k-per-pos", type=int, default=2)
     parser.add_argument("--max-candidates-per-step", type=int, default=16)
     parser.add_argument("--max-token-edit-rate", type=float, default=0.1)
+    parser.add_argument(
+        "--injection-sentence-bank",
+        type=Path,
+        default=REPO_ROOT / "injection" / "wikipedia_sentences_100.txt",
+    )
     parser.add_argument("--mlm-max-token-edit-rate", type=float, default=0.05)
     parser.add_argument("--mlm-model-name", default="answerdotai/ModernBERT-large")
     parser.add_argument(
@@ -526,7 +551,11 @@ def build_parser(attack: str = "hotflip") -> argparse.ArgumentParser:
         action="store_true",
         help="Allow model downloads; use once to populate the MLM caches.",
     )
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4 if attack == "injection_family" else 16,
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--dtype",
@@ -587,6 +616,10 @@ def main(attack: str = "hotflip") -> int:
         raise FileNotFoundError(f"C0 checkpoint not found: {args.c0_checkpoint}")
     if not args.valid_csv.is_file():
         raise FileNotFoundError(f"Validation CSV not found: {args.valid_csv}")
+    if args.attack == "injection_family" and not args.injection_sentence_bank.is_file():
+        raise FileNotFoundError(
+            f"Injection sentence bank not found: {args.injection_sentence_bank}"
+        )
 
     candidates = discover_checkpoint_candidates(args.defense_output_dir)
     duplicates: dict[str, str] = {}
@@ -690,7 +723,8 @@ def main(attack: str = "hotflip") -> int:
                 args=args,
             )
             subset_summary = _load_subset_summary(
-                candidate_out / "asr_summary.json"
+                candidate_out / "asr_summary.json",
+                args.attack,
             )
             row["subset_asr"] = float(subset_summary["asr"])
             row["subset_avg_delta"] = float(subset_summary["avg_delta"])
@@ -722,7 +756,14 @@ def main(attack: str = "hotflip") -> int:
             "max_token_edit_rate": (
                 args.mlm_max_token_edit_rate
                 if args.attack == "mlm_guided"
+                else None
+                if args.attack == "injection_family"
                 else args.max_token_edit_rate
+            ),
+            "family_aggregation": (
+                "equal_weight_mean_of_external_and_self_duplication"
+                if args.attack == "injection_family"
+                else None
             ),
             "mlm_model_name": (
                 args.mlm_model_name

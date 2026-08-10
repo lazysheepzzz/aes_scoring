@@ -50,7 +50,52 @@ python .\injection\evaluate_aes_injection_family.py `
   --skip-clean --seed 42 --batch-size 4 --dtype float32
 ```
 
-Do not train on Injection or use it for PAER checkpoint selection.  Evaluate
-the final selected PAER-v2 checkpoint only after its RH-based specification
-and checkpoint have been frozen.  This keeps Injection, like MLM-guided, as a
-held-out structural attack.
+## Injection adversarial-training baseline
+
+The original repository also trains an Injection-specific defense from
+pre-generated injected texts.  The AES adaptation therefore includes
+`D_INJECTION`.  Pair generation is offline and does not score candidates with
+the victim; training uses the original-paper objective
+`max(injected_score - clean_score, 0)^2` in addition to clean MSE.
+
+The fixed pool covers 50% of the training fold and is balanced between
+External and Self-Duplication.  Generate it first (this is CPU-only and should
+finish quickly):
+
+```powershell
+python .\injection\prepare_aes_injection_training_pairs.py --seed 42
+```
+
+Then inspect the resolved configuration and train:
+
+```powershell
+python .\injection\run_aes_injection_adv_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_injection_defense_seed42 `
+  --dry-run
+
+python .\injection\run_aes_injection_adv_training.py `
+  --seed 42 `
+  --output-dir .\outputs\aes_injection_defense_seed42
+```
+
+The 3090-safe default is microbatch 2 with 16-step accumulation, preserving
+the same effective batch size 32 used by C0/HotFlip/Rudimentary, and validation
+batch size 4.
+
+Select using the frozen 256-essay subset, clean-QWK gate `C0 - 0.02`, and the
+equal-weight External/Self-Duplication family ASR:
+
+```powershell
+python .\injection\select_aes_injection_defense_checkpoint.py `
+  --defense-output-dir .\outputs\aes_injection_defense_seed42 `
+  --selection-output-dir .\outputs\aes_injection_checkpoint_selection_seed42
+```
+
+`D_INJECTION` is an original-paper-style attack-specific baseline.  It should
+eventually be evaluated on Injection, Rudimentary, HotFlip, and MLM-guided for
+the cross-robustness matrix.
+
+Do not use Injection pairs or Injection results to train, tune, or select
+PAER.  PAER remains trained and selected only with Rudimentary+HotFlip, so
+Injection and MLM-guided remain held-out attacks for the proposed model.
