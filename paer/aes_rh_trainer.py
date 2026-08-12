@@ -96,6 +96,7 @@ class RHTrainingConfig:
     show_progress: bool = True
     max_trace_records: int | None = None
     max_train_samples: int | None = None
+    max_valid_samples: int | None = None
 
     def __post_init__(self) -> None:
         if self.training_mode not in TRAINING_MODES:
@@ -112,6 +113,10 @@ class RHTrainingConfig:
             "save_every",
         ):
             if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be greater than zero")
+        for name in ("max_trace_records", "max_train_samples", "max_valid_samples"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
                 raise ValueError(f"{name} must be greater than zero")
         for name in (
             "learning_rate",
@@ -259,9 +264,18 @@ class PairedEssayTrainingDataset(Dataset):
 
 
 class CleanValidationDataset(Dataset):
-    def __init__(self, csv_path: str | Path, label_offset: float):
+    def __init__(
+        self,
+        csv_path: str | Path,
+        label_offset: float,
+        max_samples: int | None = None,
+    ):
         frame = pd.read_csv(csv_path)
         text_col = "full_text" if "full_text" in frame.columns else "text"
+        if max_samples is not None:
+            if max_samples <= 0:
+                raise ValueError("max_valid_samples must be greater than zero")
+            frame = frame.iloc[:max_samples]
         self.items = [
             {
                 "text": str(row[text_col]),
@@ -555,6 +569,7 @@ class RHTrainer:
         self.valid_dataset = CleanValidationDataset(
             config.valid_csv,
             config.label_offset,
+            max_samples=config.max_valid_samples,
         )
         self.trace_collator = RHTraceCollator(
             self.tokenizer,

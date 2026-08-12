@@ -94,6 +94,12 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--routing-risk-bias-init", type=float, default=-5.0)
     parser.add_argument("--max-trace-records", type=int, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
+    parser.add_argument(
+        "--max-valid-samples",
+        type=int,
+        default=None,
+        help="Optional first-N validation limit for smoke tests only.",
+    )
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--online", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -142,6 +148,7 @@ def build_config(args: argparse.Namespace, training_mode: str) -> dict:
         "show_progress": not args.no_progress,
         "max_trace_records": args.max_trace_records,
         "max_train_samples": args.max_train_samples,
+        "max_valid_samples": args.max_valid_samples,
     }
 
 

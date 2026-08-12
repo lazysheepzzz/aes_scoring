@@ -10,10 +10,16 @@ import torch
 import torch.nn as nn
 
 from paer.aes_rh_trainer import (
+    CleanValidationDataset,
     PairedEssayTrainingDataset,
     RHTraceCollator,
     balanced_binary_localization_loss,
     changed_token_uplift_targets,
+)
+from paer.aes_rh_training_launcher import (
+    PAER_RH_V2,
+    build_config as build_rh_config,
+    build_parser as build_rh_parser,
 )
 from paer.modeling_paer import PAERForEssayScoring
 from paer.select_aes_rh_checkpoint import restrict_candidates_to_common_budget
@@ -139,6 +145,27 @@ class CounterfactualTargetTests(unittest.TestCase):
 
 
 class PairedTrainingDataTests(unittest.TestCase):
+    def test_smoke_limits_reach_training_and_validation_config(self):
+        args = build_rh_parser(PAER_RH_V2).parse_args(
+            ["--max-train-samples", "32", "--max-valid-samples", "24"]
+        )
+        config = build_rh_config(args, PAER_RH_V2)
+        self.assertEqual(config["max_train_samples"], 32)
+        self.assertEqual(config["max_valid_samples"], 24)
+
+    def test_clean_validation_dataset_honors_smoke_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            csv_path = Path(temporary) / "valid.csv"
+            pd.DataFrame(
+                {"full_text": ["a", "b", "c"], "score": [1, 2, 3]}
+            ).to_csv(csv_path, index=False)
+            dataset = CleanValidationDataset(
+                csv_path,
+                label_offset=1.0,
+                max_samples=2,
+            )
+            self.assertEqual(len(dataset), 2)
+
     def test_every_clean_essay_is_kept_and_only_selected_rows_are_attacked(self):
         with tempfile.TemporaryDirectory() as temporary:
             csv_path = Path(temporary) / "train.csv"
