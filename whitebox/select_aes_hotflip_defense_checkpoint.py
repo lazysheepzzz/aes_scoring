@@ -291,7 +291,11 @@ def _load_clean_qwk(path: Path) -> float:
     return float(payload.get("rounded_qwk", payload["qwk"]))
 
 
-def _load_subset_summary(path: Path, attack: str) -> dict[str, Any]:
+def _load_subset_summary(
+    path: Path,
+    attack: str | None = None,
+) -> dict[str, Any]:
+    """Load one subset result; default preserves pre-Injection callers."""
     if attack == "injection_family":
         payload = json.loads(
             path.with_name("injection_family_summary.json").read_text(

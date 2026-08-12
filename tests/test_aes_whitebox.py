@@ -54,6 +54,7 @@ from whitebox.eval_hotflip_defended import (
     build_parser as build_evaluation_parser,
 )
 from whitebox.select_aes_hotflip_defense_checkpoint import (
+    _load_subset_summary,
     build_parser as build_selection_parser,
     create_or_load_debug_subset,
     discover_checkpoint_candidates,
@@ -765,6 +766,15 @@ class AESWhiteboxTrainingTest(unittest.TestCase):
 
 
 class AESCheckpointSelectionTest(unittest.TestCase):
+    def test_legacy_subset_summary_loader_call_remains_supported(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "asr_summary.json"
+            path.write_text(
+                json.dumps([{"attack": "hotflip", "asr": 0.25}]),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_subset_summary(path)["asr"], 0.25)
+
     def test_rudimentary_evaluator_has_rudimentary_default(self):
         args = build_evaluation_parser("rudimentary").parse_args([])
 
