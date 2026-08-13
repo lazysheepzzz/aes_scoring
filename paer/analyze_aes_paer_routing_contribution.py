@@ -218,6 +218,12 @@ def main() -> int:
         raise ValueError("batch_size and max_length must be greater than zero")
     if not args.checkpoint.is_dir():
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
+    paer_config_path = args.checkpoint / "paer_config.json"
+    paer_config = (
+        json.loads(paer_config_path.read_text(encoding="utf-8"))
+        if paer_config_path.is_file()
+        else {}
+    )
     if not (args.checkpoint / "paer_config.json").is_file():
         raise FileNotFoundError(
             f"PAER configuration not found: {args.checkpoint / 'paer_config.json'}"
@@ -272,6 +278,11 @@ def main() -> int:
     payload = {
         "protocol": {
             "checkpoint": str(args.checkpoint.resolve()),
+            "paer_model_type": paer_config.get("model_type", "unknown"),
+            "base_logits_semantics": paer_config.get(
+                "base_logits_semantics",
+                "global scorer before scalar PAER correction",
+            ),
             "diagnostic": "fixed_adversarial_set_routing_replay",
             "adaptive_route_off_attack": False,
             "interpretation_limit": (

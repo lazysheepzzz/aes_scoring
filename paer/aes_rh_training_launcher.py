@@ -15,10 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MIXED_AT_RH = "mixed_at_rh"
 PAER_RH = "paer_rh"
 PAER_RH_V2 = "paer_rh_v2"
+PAER_RH_V3 = "paer_rh_v3"
 
 
 def build_parser(training_mode: str) -> argparse.ArgumentParser:
-    if training_mode not in (MIXED_AT_RH, PAER_RH, PAER_RH_V2):
+    if training_mode not in (MIXED_AT_RH, PAER_RH, PAER_RH_V2, PAER_RH_V3):
         raise ValueError(training_mode)
     parser = argparse.ArgumentParser(
         description=f"Train {training_mode} on shared offline RH traces."
@@ -52,6 +53,7 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
         MIXED_AT_RH: "aes_mixed_at_rh_seed42",
         PAER_RH: "aes_paer_rh_seed42",
         PAER_RH_V2: "aes_paer_rh_v2_seed42",
+        PAER_RH_V3: "aes_paer_rh_v3_seed42",
     }
     default_name = default_names[training_mode]
     parser.add_argument(
@@ -91,7 +93,18 @@ def build_parser(training_mode: str) -> argparse.ArgumentParser:
     parser.add_argument("--correction-loss-beta", type=float, default=0.02)
     parser.add_argument("--max-correction-target", type=float, default=1.0)
     parser.add_argument("--routing-top-k", type=int, default=8)
-    parser.add_argument("--routing-risk-bias-init", type=float, default=-5.0)
+    parser.add_argument(
+        "--routing-risk-bias-init",
+        type=float,
+        default=-2.0 if training_mode == PAER_RH_V3 else -5.0,
+        help=(
+            "Initial risk logit. V3 uses -2 so pairwise routing gradients do "
+            "not vanish; clean suppression losses still constrain false routing."
+        ),
+    )
+    parser.add_argument("--max-token-evidence", type=float, default=0.5)
+    parser.add_argument("--route-lift-loss-weight", type=float, default=4.0)
+    parser.add_argument("--attention-alignment-loss-weight", type=float, default=0.05)
     parser.add_argument("--max-trace-records", type=int, default=None)
     parser.add_argument("--max-train-samples", type=int, default=None)
     parser.add_argument(
@@ -145,6 +158,9 @@ def build_config(args: argparse.Namespace, training_mode: str) -> dict:
         "max_correction_target": args.max_correction_target,
         "routing_top_k": args.routing_top_k,
         "routing_risk_bias_init": args.routing_risk_bias_init,
+        "max_token_evidence": args.max_token_evidence,
+        "route_lift_loss_weight": args.route_lift_loss_weight,
+        "attention_alignment_loss_weight": args.attention_alignment_loss_weight,
         "show_progress": not args.no_progress,
         "max_trace_records": args.max_trace_records,
         "max_train_samples": args.max_train_samples,

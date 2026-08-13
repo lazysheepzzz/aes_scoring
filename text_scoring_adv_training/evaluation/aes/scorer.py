@@ -50,9 +50,20 @@ class AESScorer(nn.Module):
         # Load either a standard AES regressor or a PAER directional-routing
         # checkpoint.  The original checkpoint format remains unchanged.
         if (self.checkpoint_path / "paer_config.json").is_file():
-            from paer.modeling_paer import PAERForEssayScoring
+            paer_config = json.loads(
+                (self.checkpoint_path / "paer_config.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            if paer_config.get("model_type") == "paer_aes_v3":
+                from paer.modeling_paer_v3 import PAERV3ForEssayScoring
 
-            self.model = PAERForEssayScoring.from_pretrained(
+                paer_class = PAERV3ForEssayScoring
+            else:
+                from paer.modeling_paer import PAERForEssayScoring
+
+                paer_class = PAERForEssayScoring
+            self.model = paer_class.from_pretrained(
                 self.checkpoint_path,
                 dtype=dtype,
             ).to(device)

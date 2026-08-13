@@ -15,13 +15,16 @@ from paer.aes_rh_trainer import (
     RHTraceCollator,
     balanced_binary_localization_loss,
     changed_token_uplift_targets,
+    edited_token_attention_loss,
 )
 from paer.aes_rh_training_launcher import (
     PAER_RH_V2,
+    PAER_RH_V3,
     build_config as build_rh_config,
     build_parser as build_rh_parser,
 )
 from paer.modeling_paer import PAERForEssayScoring
+from paer.modeling_paer_v3 import PAERV3ForEssayScoring
 from paer.select_aes_rh_checkpoint import restrict_candidates_to_common_budget
 from text_scoring_adv_training.evaluation.aes.run_attacks import build_attack
 
@@ -111,6 +114,48 @@ class PAERModelTests(unittest.TestCase):
         )
 
 
+class PAERV3ModelTests(unittest.TestCase):
+    def test_positive_evidence_is_suppressed_inside_aggregation(self):
+        model = PAERV3ForEssayScoring(_FakeBaseModel())
+        with torch.no_grad():
+            model.risk_head.weight.zero_()
+            model.risk_head.bias.fill_(8.0)
+            model.token_evidence_head.weight.zero_()
+            model.token_evidence_head.bias.fill_(1.0)
+        output = model(
+            input_ids=torch.tensor([[1, 2, 3, 4]]),
+            attention_mask=torch.ones(1, 4, dtype=torch.long),
+        )
+        self.assertGreater(float(output.correction.item()), 0.0)
+        self.assertLess(float(output.logits.item()), float(output.base_logits.item()))
+
+    def test_negative_evidence_is_never_suppressed(self):
+        model = PAERV3ForEssayScoring(_FakeBaseModel())
+        with torch.no_grad():
+            model.risk_head.weight.zero_()
+            model.risk_head.bias.fill_(8.0)
+            model.token_evidence_head.weight.zero_()
+            model.token_evidence_head.bias.fill_(-1.0)
+        output = model(
+            input_ids=torch.tensor([[1, 2, 3, 4]]),
+            attention_mask=torch.ones(1, 4, dtype=torch.long),
+        )
+        self.assertAlmostEqual(float(output.correction.item()), 0.0, places=7)
+        self.assertAlmostEqual(
+            float(output.logits.item()), float(output.base_logits.item()), places=7
+        )
+
+    def test_v3_supports_inputs_embeds_for_adaptive_hotflip(self):
+        model = PAERV3ForEssayScoring(_FakeBaseModel())
+        embeddings = torch.randn(1, 4, 4, requires_grad=True)
+        output = model(
+            inputs_embeds=embeddings,
+            attention_mask=torch.ones(1, 4, dtype=torch.long),
+        )
+        output.logits.sum().backward()
+        self.assertIsNotNone(embeddings.grad)
+
+
 class CounterfactualTargetTests(unittest.TestCase):
     def test_replacement_marks_only_after_text_change(self):
         targets = changed_token_uplift_targets(
@@ -143,6 +188,17 @@ class CounterfactualTargetTests(unittest.TestCase):
 
         self.assertGreater(float(loss.item()), 1.0)
 
+    def test_attention_alignment_rewards_mass_on_edited_tokens(self):
+        targets = torch.tensor([[0.0, 1.0, 0.0]])
+        mask = torch.ones_like(targets)
+        aligned = edited_token_attention_loss(
+            torch.tensor([[0.05, 0.90, 0.05]]), targets, mask
+        )
+        diffuse = edited_token_attention_loss(
+            torch.tensor([[0.45, 0.10, 0.45]]), targets, mask
+        )
+        self.assertLess(float(aligned.item()), float(diffuse.item()))
+
 
 class PairedTrainingDataTests(unittest.TestCase):
     def test_smoke_limits_reach_training_and_validation_config(self):
@@ -152,6 +208,13 @@ class PairedTrainingDataTests(unittest.TestCase):
         config = build_rh_config(args, PAER_RH_V2)
         self.assertEqual(config["max_train_samples"], 32)
         self.assertEqual(config["max_valid_samples"], 24)
+
+    def test_v3_launcher_exposes_directional_aggregation_losses(self):
+        args = build_rh_parser(PAER_RH_V3).parse_args([])
+        config = build_rh_config(args, PAER_RH_V3)
+        self.assertEqual(config["training_mode"], PAER_RH_V3)
+        self.assertGreater(config["route_lift_loss_weight"], 0.0)
+        self.assertGreater(config["attention_alignment_loss_weight"], 0.0)
 
     def test_clean_validation_dataset_honors_smoke_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -253,6 +316,7 @@ class PairedTrainingDataTests(unittest.TestCase):
         self.assertEqual(batch["adversarial_input_ids"].shape[0], 1)
         self.assertEqual(batch["adversarial_indices"].tolist(), [1])
         self.assertGreater(float(batch["uplift_targets"].sum()), 0.0)
+        self.assertGreater(float(batch["cumulative_uplift_targets"].sum()), 0.0)
         self.assertAlmostEqual(
             float(batch["cumulative_deltas"][0].item()),
             0.1,

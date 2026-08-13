@@ -217,3 +217,101 @@ python .\paer\run_aes_paer_rh_training.py `
 ```
 
 Smoke outputs are for execution validation only and must not enter tables.
+
+## PAER-v3: directional token-evidence aggregation
+
+V1 and v2 are frozen historical experiments.  V3 is a separately named
+architecture, not an overwrite of either result.  It keeps the pretrained AES
+regressor as a global score prior and adds an attention-weighted signed token
+evidence branch.  Each signed contribution is decomposed into positive and
+negative evidence before aggregation.  The risk router suppresses only the
+positive part; negative evidence is always retained.  Consequently,
+`base_logits` in a v3 checkpoint is the exact route-off counterfactual with
+the same token aggregation and backbone.
+
+V3 uses the same B0 initialization, RH trace JSONL, clean training essays,
+three epochs, effective batch size 32, and RH-only checkpoint selection as
+Mixed-AT/v1/v2.  Its method-specific losses are recorded in
+`training_config.json`: pairwise correction-lift calibration and edited-token
+attention alignment.  MLM-guided and Injection remain held out from training,
+validation, hyperparameter tuning, and checkpoint selection.
+
+### V3 smoke test (execution only)
+
+The limits below keep the run short.  On the 24 GB RTX 3090, keep the physical
+batch at 1 for this smoke test and use bfloat16.
+
+```powershell
+python .\paer\run_aes_paer_rh_v3_training.py `
+  --seed 42 `
+  --trace-jsonl .\artifacts\paer\rh_counterfactual_training_traces_seed42.jsonl `
+  --output-dir .\outputs\smoke_aes_paer_rh_v3_seed42 `
+  --max-trace-records 64 `
+  --max-train-samples 32 `
+  --max-valid-samples 32 `
+  --num-epochs 1 `
+  --per-device-train-batch-size 1 `
+  --per-device-eval-batch-size 1 `
+  --gradient-accumulation-steps 1 `
+  --eval-every 32 `
+  --save-every 32
+```
+
+Check that the three files exist and inspect the diagnostics.  Smoke QWK is
+not a scientific result because validation is limited to 32 essays.
+
+```powershell
+Test-Path .\outputs\smoke_aes_paer_rh_v3_seed42\best\model.safetensors
+Test-Path .\outputs\smoke_aes_paer_rh_v3_seed42\best\paer_heads.pt
+Test-Path .\outputs\smoke_aes_paer_rh_v3_seed42\best\paer_config.json
+Get-Content .\outputs\smoke_aes_paer_rh_v3_seed42\training_diagnostics.jsonl -Tail 3
+```
+
+### Formal v3 run and RH-only selection
+
+```powershell
+python .\paer\run_aes_paer_rh_v3_training.py `
+  --seed 42 `
+  --trace-jsonl .\artifacts\paer\rh_counterfactual_training_traces_seed42.jsonl `
+  --output-dir .\outputs\aes_paer_rh_v3_seed42
+
+python .\paer\select_aes_rh_checkpoint.py `
+  --defense-output-dir .\outputs\aes_paer_rh_v3_seed42 `
+  --selection-output-dir .\outputs\aes_paer_rh_v3_checkpoint_selection_seed42 `
+  --max-checkpoint-step 1400 `
+  --batch-size 4 `
+  --dtype float32
+
+$paerV3 = (Get-Content `
+  .\outputs\aes_paer_rh_v3_checkpoint_selection_seed42\best_checkpoint.json `
+  -Raw | ConvertFrom-Json).checkpoint_path
+```
+
+Evaluate the two seen attacks first, then run the route-off replay.  The replay
+must show a material positive correction lift and a route-on improvement; it
+is the causal check that distinguishes v3's module contribution from ordinary
+backbone adversarial training.
+
+```powershell
+python .\whitebox\evaluate_aes_checkpoint.py `
+  --checkpoint $paerV3 --attack rudimentary `
+  --out .\outputs\eval_rudimentary_paer_rh_v3_seed42 `
+  --seed 42 --batch-size 4 --dtype float32
+
+python .\whitebox\evaluate_aes_checkpoint.py `
+  --checkpoint $paerV3 --attack hotflip --skip-clean `
+  --out .\outputs\eval_hotflip_paer_rh_v3_seed42 `
+  --seed 42 --batch-size 4 --dtype float32
+
+python .\paer\analyze_aes_paer_routing_contribution.py `
+  --checkpoint $paerV3 `
+  --attack-details `
+    .\outputs\eval_rudimentary_paer_rh_v3_seed42\rudimentary_details.json `
+    .\outputs\eval_hotflip_paer_rh_v3_seed42\hotflip_details.json `
+  --out .\outputs\aes_paer_rh_v3_routing_diagnostic_seed42.json `
+  --batch-size 4 --dtype float32
+```
+
+Only after the architecture and RH-selected checkpoint are frozen should v3
+be evaluated on the unseen Injection family and MLM-guided attacks.  Do not
+use either result to revise v3 or reselect a checkpoint.

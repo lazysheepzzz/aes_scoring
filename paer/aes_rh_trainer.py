@@ -34,6 +34,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from paer.modeling_paer import PAERForEssayScoring
+from paer.modeling_paer_v3 import PAERV3ForEssayScoring
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.training.aes_trainer import (
     build_adamw_parameter_groups,
@@ -46,11 +47,12 @@ from text_scoring_adv_training.training.aes_trainer import (
 MIXED_AT_RH = "mixed_at_rh"
 PAER_RH = "paer_rh"
 PAER_RH_V2 = "paer_rh_v2"
-TRAINING_MODES = (MIXED_AT_RH, PAER_RH, PAER_RH_V2)
+PAER_RH_V3 = "paer_rh_v3"
+TRAINING_MODES = (MIXED_AT_RH, PAER_RH, PAER_RH_V2, PAER_RH_V3)
 
 
 def is_paer_mode(training_mode: str) -> bool:
-    return training_mode in (PAER_RH, PAER_RH_V2)
+    return training_mode in (PAER_RH, PAER_RH_V2, PAER_RH_V3)
 
 
 @dataclass
@@ -93,6 +95,9 @@ class RHTrainingConfig:
     max_correction_target: float = 1.0
     routing_top_k: int = 8
     routing_risk_bias_init: float = -5.0
+    max_token_evidence: float = 0.5
+    route_lift_loss_weight: float = 4.0
+    attention_alignment_loss_weight: float = 0.05
     show_progress: bool = True
     max_trace_records: int | None = None
     max_train_samples: int | None = None
@@ -127,6 +132,7 @@ class RHTrainingConfig:
             "paer_head_learning_rate",
             "correction_loss_beta",
             "max_correction_target",
+            "max_token_evidence",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero")
@@ -138,6 +144,8 @@ class RHTrainingConfig:
             "correction_scale",
             "correction_calibration_weight",
             "clean_correction_weight",
+            "route_lift_loss_weight",
+            "attention_alignment_loss_weight",
         ):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
@@ -383,6 +391,9 @@ class RHTraceCollator:
         token_targets = torch.zeros_like(
             adversarial["attention_mask"], dtype=torch.float32
         )
+        cumulative_token_targets = torch.zeros_like(
+            adversarial["attention_mask"], dtype=torch.float32
+        )
         localization_mask = adversarial["attention_mask"].to(torch.float32)
         for row_index, item in enumerate(selected_items):
             before_length = int(before["attention_mask"][row_index].sum())
@@ -397,6 +408,23 @@ class RHTraceCollator:
                 gain_scale=self.gain_scale,
             )
             token_targets[row_index, :after_length] = torch.tensor(targets)
+            clean_batch_index = int(adversarial_indices[row_index])
+            clean_length = int(clean["attention_mask"][clean_batch_index].sum())
+            clean_ids = clean["input_ids"][
+                clean_batch_index, :clean_length
+            ].tolist()
+            cumulative_targets = changed_token_uplift_targets(
+                clean_ids,
+                after_ids,
+                special_ids=self.special_ids,
+                step_gain=float(
+                    item.get("cumulative_delta", item["step_gain"])
+                ),
+                gain_scale=self.gain_scale,
+            )
+            cumulative_token_targets[row_index, :after_length] = torch.tensor(
+                cumulative_targets
+            )
             for position, token_id in enumerate(after_ids):
                 if token_id in self.special_ids:
                     localization_mask[row_index, position] = 0.0
@@ -413,6 +441,7 @@ class RHTraceCollator:
                 dtype=torch.float32,
             ),
             "uplift_targets": token_targets,
+            "cumulative_uplift_targets": cumulative_token_targets,
             "localization_mask": localization_mask,
             "adversarial_indices": adversarial_indices,
             "step_gains": torch.tensor(
@@ -477,8 +506,27 @@ def balanced_binary_localization_loss(
     return torch.stack(class_means).mean()
 
 
-def build_paer_v2_optimizer_groups(
-    model: PAERForEssayScoring,
+def edited_token_attention_loss(
+    attention_weights: torch.Tensor,
+    positive_targets: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    """Concentrate v3 score evidence on the accepted positive-gain edit."""
+    target_mass = positive_targets.float() * mask.float()
+    row_mass = target_mass.sum(dim=1, keepdim=True)
+    valid_rows = row_mass.squeeze(1) > 0
+    if not bool(valid_rows.any()):
+        return attention_weights.sum() * 0.0
+    target_distribution = target_mass / row_mass.clamp_min(1e-8)
+    cross_entropy = -(
+        target_distribution
+        * torch.log(attention_weights.float().clamp_min(1e-8))
+    ).sum(dim=1)
+    return cross_entropy[valid_rows].mean()
+
+
+def build_paer_head_optimizer_groups(
+    model: torch.nn.Module,
     *,
     weight_decay: float,
     head_learning_rate: float,
@@ -487,7 +535,13 @@ def build_paer_v2_optimizer_groups(
     groups = build_adamw_parameter_groups(model.base_model, weight_decay)
     head_decay = []
     head_no_decay = []
-    for head in (model.risk_head, model.positive_evidence_head):
+    head_names = ["risk_head"]
+    if hasattr(model, "positive_evidence_head"):
+        head_names.append("positive_evidence_head")
+    if hasattr(model, "token_evidence_head"):
+        head_names.extend(("token_evidence_head", "attention_head"))
+    for head_name in head_names:
+        head = getattr(model, head_name)
         for name, parameter in head.named_parameters():
             target = (
                 head_no_decay
@@ -531,7 +585,15 @@ class RHTrainer:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
 
         print(f"Loading {config.training_mode} from {config.checkpoint_path}...", flush=True)
-        if is_paer_mode(config.training_mode):
+        if config.training_mode == PAER_RH_V3:
+            self.model = PAERV3ForEssayScoring.from_base_checkpoint(
+                config.checkpoint_path,
+                dtype=torch.float32,
+                correction_scale=config.correction_scale,
+                risk_bias_init=config.routing_risk_bias_init,
+                max_token_evidence=config.max_token_evidence,
+            ).to(self.device)
+        elif is_paer_mode(config.training_mode):
             self.model = PAERForEssayScoring.from_base_checkpoint(
                 config.checkpoint_path,
                 dtype=torch.float32,
@@ -596,12 +658,12 @@ class RHTrainer:
         )
 
         optimizer_groups = (
-            build_paer_v2_optimizer_groups(
+            build_paer_head_optimizer_groups(
                 self.model,
                 weight_decay=config.weight_decay,
                 head_learning_rate=config.paer_head_learning_rate,
             )
-            if config.training_mode == PAER_RH_V2
+            if config.training_mode in (PAER_RH_V2, PAER_RH_V3)
             else build_adamw_parameter_groups(self.model, config.weight_decay)
         )
         self.optimizer = torch.optim.AdamW(
@@ -628,7 +690,13 @@ class RHTrainer:
                 ),
                 "training_attacks": ["rudimentary", "hotflip"],
                 "held_out_attack": "mlm_guided",
+                "held_out_attacks": ["mlm_guided", "injection_family"],
                 "shared_trace_dataset_for_mixed_at_and_paer": True,
+                "v3_architecture": (
+                    "directional_token_evidence_aggregation"
+                    if config.training_mode == PAER_RH_V3
+                    else None
+                ),
             }
         )
         Path(config.output_dir, "training_config.json").write_text(
@@ -694,6 +762,7 @@ class RHTrainer:
         clean_localization = torch.zeros((), device=self.device)
         false_suppression = torch.zeros((), device=self.device)
         clean_correction_loss = torch.zeros((), device=self.device)
+        clean_correction_reference = torch.zeros_like(labels)
         if is_paer_mode(cfg.training_mode):
             clean_risk_logits = clean_output.risk_logits.float()
             clean_content_mask = clean_output.content_mask.float()
@@ -709,8 +778,9 @@ class RHTrainer:
                 torch.sigmoid(clean_risk_logits),
                 clean_content_mask,
             )
-            if cfg.training_mode == PAER_RH_V2:
+            if cfg.training_mode in (PAER_RH_V2, PAER_RH_V3):
                 clean_correction_loss = clean_output.correction.float().pow(2).mean()
+                clean_correction_reference = clean_output.correction.float().detach()
         clean_objective = cfg.clean_loss_weight * clean_loss
         if is_paer_mode(cfg.training_mode):
             clean_objective = (
@@ -718,7 +788,7 @@ class RHTrainer:
                 + 0.5 * cfg.localization_loss_weight * clean_localization
                 + cfg.clean_false_suppression_weight * false_suppression
             )
-            if cfg.training_mode == PAER_RH_V2:
+            if cfg.training_mode in (PAER_RH_V2, PAER_RH_V3):
                 clean_objective = (
                     clean_objective
                     + cfg.clean_correction_weight * clean_correction_loss
@@ -735,6 +805,9 @@ class RHTrainer:
         adversarial_localization = torch.zeros((), device=self.device)
         mean_correction = torch.zeros((), device=self.device)
         correction_calibration = torch.zeros((), device=self.device)
+        route_lift_loss = torch.zeros((), device=self.device)
+        attention_alignment_loss = torch.zeros((), device=self.device)
+        mean_correction_lift = torch.zeros((), device=self.device)
         adversarial_objective_value = 0.0
         if n_adversarial:
             with self._autocast_context():
@@ -754,10 +827,14 @@ class RHTrainer:
                 cfg.adversarial_loss_weight * adversarial_loss
             )
             if is_paer_mode(cfg.training_mode):
-                targets = batch["uplift_targets"].float()
+                targets = (
+                    batch["cumulative_uplift_targets"].float()
+                    if cfg.training_mode == PAER_RH_V3
+                    else batch["uplift_targets"].float()
+                )
                 mask = batch["localization_mask"].float()
                 adversarial_risk_logits = adversarial_output.risk_logits.float()
-                if cfg.training_mode == PAER_RH_V2:
+                if cfg.training_mode in (PAER_RH_V2, PAER_RH_V3):
                     adversarial_localization = balanced_binary_localization_loss(
                         adversarial_risk_logits,
                         targets,
@@ -783,7 +860,7 @@ class RHTrainer:
                     * adversarial_localization
                 )
                 mean_correction = adversarial_output.correction.float().mean()
-                if cfg.training_mode == PAER_RH_V2:
+                if cfg.training_mode in (PAER_RH_V2, PAER_RH_V3):
                     correction_targets = batch["cumulative_deltas"].float().clamp(
                         min=0.0,
                         max=cfg.max_correction_target,
@@ -797,6 +874,28 @@ class RHTrainer:
                         adversarial_objective
                         + cfg.correction_calibration_weight
                         * correction_calibration
+                    )
+                if cfg.training_mode == PAER_RH_V3:
+                    correction_lift = (
+                        adversarial_output.correction.float()
+                        - clean_correction_reference[adversarial_indices]
+                    )
+                    mean_correction_lift = correction_lift.mean()
+                    route_lift_loss = F.smooth_l1_loss(
+                        correction_lift,
+                        correction_targets,
+                        beta=cfg.correction_loss_beta,
+                    )
+                    attention_alignment_loss = edited_token_attention_loss(
+                        adversarial_output.attention_weights.float(),
+                        targets,
+                        mask,
+                    )
+                    adversarial_objective = (
+                        adversarial_objective
+                        + cfg.route_lift_loss_weight * route_lift_loss
+                        + cfg.attention_alignment_loss_weight
+                        * attention_alignment_loss
                     )
             adversarial_objective_value = float(adversarial_objective.item())
             (adversarial_objective / cfg.gradient_accumulation_steps).backward()
@@ -812,7 +911,10 @@ class RHTrainer:
             "false_suppression": false_suppression_value,
             "clean_correction_loss": float(clean_correction_loss.item()),
             "correction_calibration_loss": float(correction_calibration.item()),
+            "route_lift_loss": float(route_lift_loss.item()),
+            "attention_alignment_loss": float(attention_alignment_loss.item()),
             "mean_correction": float(mean_correction.item()),
+            "mean_correction_lift": float(mean_correction_lift.item()),
             "n_adversarial": n_adversarial,
         }
 
@@ -917,6 +1019,7 @@ class RHTrainer:
                         loc=f"{metrics['localization_loss']:.4f}",
                         corr=f"{metrics['mean_correction']:.4f}",
                         cal=f"{metrics['correction_calibration_loss']:.4f}",
+                        lift=f"{metrics['mean_correction_lift']:.4f}",
                         n_adv=metrics["n_adversarial"],
                     )
                 if batch_index == 1 or batch_index % 20 == 0:
