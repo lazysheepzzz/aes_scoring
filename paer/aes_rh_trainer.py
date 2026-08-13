@@ -688,9 +688,20 @@ class RHTrainer:
                     config.per_device_train_batch_size
                     * config.gradient_accumulation_steps
                 ),
-                "training_attacks": ["rudimentary", "hotflip"],
-                "held_out_attack": "mlm_guided",
-                "held_out_attacks": ["mlm_guided", "injection_family"],
+                "attack_defense_families": [
+                    "rudimentary",
+                    "hotflip",
+                    "injection_family",
+                ],
+                "attack_only_transfer_evaluation": "mlm_guided",
+                "training_exposure": {
+                    "seen": ["rudimentary", "hotflip"],
+                    "unseen": ["injection_family", "mlm_guided"],
+                },
+                "experiment_taxonomy": (
+                    "rudimentary_hotflip_injection_are_peer_attack_defense_"
+                    "families; mlm_guided_is_attack_only_transfer_evaluation"
+                ),
                 "shared_trace_dataset_for_mixed_at_and_paer": True,
                 "v3_architecture": (
                     "directional_token_evidence_aggregation"

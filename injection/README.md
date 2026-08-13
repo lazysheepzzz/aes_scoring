@@ -10,6 +10,13 @@ injection/evaluate_aes_injection_family.py
 
 ## Frozen protocol
 
+Injection is a peer attack--defense family alongside Rudimentary and HotFlip.
+It is not an auxiliary or lower-level experiment merely because its AES
+implementation was completed later. All three have dedicated attacks and
+defenses. MLM-guided has a different role: it is attack-only transfer
+evaluation and has no dedicated defense in the source protocol. “Seen/unseen”
+labels elsewhere refer only to a particular model's training exposure.
+
 Injection is evaluated as two equally weighted subattacks:
 
 1. `injection_external`: scorer-guided insertion from the fixed 100-sentence
@@ -96,6 +103,9 @@ python .\injection\select_aes_injection_defense_checkpoint.py `
 eventually be evaluated on Injection, Rudimentary, HotFlip, and MLM-guided for
 the cross-robustness matrix.
 
-Do not use Injection pairs or Injection results to train, tune, or select
-PAER.  PAER remains trained and selected only with Rudimentary+HotFlip, so
-Injection and MLM-guided remain held-out attacks for the proposed model.
+Do not use Injection pairs or results to revise the already frozen
+PAER-RH-v3 variant after looking at its Injection evaluation.  In the planned
+PAER-RHI-v3 primary experiment, Injection is explicitly included in training
+and checkpoint selection on the same footing as Rudimentary and HotFlip, and
+Mixed-AT-RHI must use the identical three-family training pool.  MLM-guided
+then remains the unseen family.

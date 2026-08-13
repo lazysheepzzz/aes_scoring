@@ -1,8 +1,31 @@
 # PAER-v3 experiment protocol
 
-This file freezes the PAER-v3 protocol before its formal seed-42 run.  Existing
+This file freezes the PAER-RH-v3 protocol before its formal seed-42 run. Existing
 B0, C0, attack-specific defenses, Mixed-AT-RH, PAER-v1, and PAER-v2 artifacts
 remain historical results and must not be overwritten.
+
+## Attack-family taxonomy
+
+Rudimentary, HotFlip, and Injection are the three peer attack--defense
+families. Each has an undefended attack evaluation, a corresponding
+attack-specific adversarial-training defense, and cross-defense robustness
+evaluation. Neither implementation order nor seen/unseen status changes their
+equal role. Injection External and Self-Duplication are additionally reported
+as the two components of the Injection-family result.
+
+MLM-guided has a different experimental role. It is an attack-only transfer
+evaluation and has no separate MLM defense in the source paper or in this
+protocol. It may appear as an additional attack column when reporting model
+robustness, but it must not be described as a fourth peer attack--defense
+family.
+
+“Seen” and “unseen” describe only a particular model's training exposure.  For
+PAER-RH-v3, Rudimentary and HotFlip are seen, while Injection and MLM-guided
+are unseen.  Thus PAER-RH-v3 is retained as a two-family training variant; it
+is not relabeled as the final three-family model. The planned primary model is
+PAER-RHI-v3, trained and selected symmetrically on all three attack--defense
+families, with MLM-guided retained only as unseen transfer evaluation. Its
+required data-matched baseline is Mixed-AT-RHI.
 
 ## Research claim under test
 
@@ -40,10 +63,16 @@ the cumulative score-inflation target.
 
 ## Leakage boundary
 
-MLM-guided and Injection-family examples are excluded from v3 training,
+MLM-guided and Injection-family examples are excluded from PAER-RH-v3 training,
 validation, loss tuning, and checkpoint selection.  Their existing results
 may be reported as historical context, but the v3 checkpoint must be frozen
 after RH-only selection before either v3 evaluation is run.
+
+This exclusion is a property of the RH variant, not a claim that Injection is
+secondary. For the planned RHI main experiment, Injection becomes a seen
+training and selection family under the same status as Rudimentary and
+HotFlip. MLM-guided remains an unseen attack-only transfer evaluation; no MLM
+specialized defense is introduced.
 
 ## Required reports; no invented success threshold
 

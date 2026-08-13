@@ -220,7 +220,7 @@ Smoke outputs are for execution validation only and must not enter tables.
 
 ## PAER-v3: directional token-evidence aggregation
 
-V1 and v2 are frozen historical experiments.  V3 is a separately named
+V1 and v2 are frozen historical experiments.  PAER-RH-v3 is a separately named
 architecture, not an overwrite of either result.  It keeps the pretrained AES
 regressor as a global score prior and adds an attention-weighted signed token
 evidence branch.  Each signed contribution is decomposed into positive and
@@ -229,12 +229,19 @@ positive part; negative evidence is always retained.  Consequently,
 `base_logits` in a v3 checkpoint is the exact route-off counterfactual with
 the same token aggregation and backbone.
 
-V3 uses the same B0 initialization, RH trace JSONL, clean training essays,
+PAER-RH-v3 uses the same B0 initialization, RH trace JSONL, clean training essays,
 three epochs, effective batch size 32, and RH-only checkpoint selection as
 Mixed-AT/v1/v2.  Its method-specific losses are recorded in
 `training_config.json`: pairwise correction-lift calibration and edited-token
-attention alignment.  MLM-guided and Injection remain held out from training,
-validation, hyperparameter tuning, and checkpoint selection.
+attention alignment.
+
+Rudimentary, HotFlip, and Injection are the three peer attack--defense
+families: each has an undefended attack, a dedicated defense, and cross-defense
+evaluation. MLM-guided has no dedicated defense in the source protocol and is
+used only as attack-side transfer evaluation. PAER-RH-v3 sees R/H and is
+retained as a two-family variant. The planned primary PAER-RHI-v3 and its
+data-matched Mixed-AT-RHI baseline will see R/H/Injection symmetrically, while
+MLM-guided remains an unseen attack-only evaluation.
 
 ### V3 smoke test (execution only)
 
@@ -312,6 +319,7 @@ python .\paer\analyze_aes_paer_routing_contribution.py `
   --batch-size 4 --dtype float32
 ```
 
-Only after the architecture and RH-selected checkpoint are frozen should v3
-be evaluated on the unseen Injection family and MLM-guided attacks.  Do not
-use either result to revise v3 or reselect a checkpoint.
+Only after the architecture and RH-selected checkpoint are frozen should this
+RH variant be evaluated on unseen Injection and MLM-guided. Injection measures
+transfer to the third peer attack--defense family; MLM measures attack-only
+unseen transfer. Do not use either result to revise or reselect PAER-RH-v3.
