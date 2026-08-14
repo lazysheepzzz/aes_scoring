@@ -19,13 +19,14 @@ protocol. It may appear as an additional attack column when reporting model
 robustness, but it must not be described as a fourth peer attack--defense
 family.
 
-“Seen” and “unseen” describe only a particular model's training exposure.  For
-PAER-RH-v3, Rudimentary and HotFlip are seen, while Injection and MLM-guided
-are unseen.  Thus PAER-RH-v3 is retained as a two-family training variant; it
-is not relabeled as the final three-family model. The planned primary model is
-PAER-RHI-v3, trained and selected symmetrically on all three attack--defense
-families, with MLM-guided retained only as unseen transfer evaluation. Its
-required data-matched baseline is Mixed-AT-RHI.
+“Seen” and “unseen” describe only a particular model's training exposure. For
+the formal PAER-RH-v3 method, Rudimentary and HotFlip are seen, while Injection
+and MLM-guided are unseen. Injection nevertheless remains a peer
+attack--defense family in the main evaluation matrix; its PAER-RH-v3 result
+measures cross-family transfer. PAER-RHI-v3 is only an optional future
+three-family extension, not a replacement for or prerequisite of the completed
+PAER-RH-v3 experiment. If that extension is run, its required data-matched
+baseline is Mixed-AT-RHI.
 
 ## Research claim under test
 
@@ -68,11 +69,11 @@ validation, loss tuning, and checkpoint selection.  Their existing results
 may be reported as historical context, but the v3 checkpoint must be frozen
 after RH-only selection before either v3 evaluation is run.
 
-This exclusion is a property of the RH variant, not a claim that Injection is
-secondary. For the planned RHI main experiment, Injection becomes a seen
-training and selection family under the same status as Rudimentary and
-HotFlip. MLM-guided remains an unseen attack-only transfer evaluation; no MLM
-specialized defense is introduced.
+This exclusion is a property of PAER-RH-v3, not a claim that Injection is
+secondary. An optional RHI extension may make Injection a seen training and
+selection family under the same status as Rudimentary and HotFlip, but that is
+a distinct additional experiment. MLM-guided remains attack-only transfer
+evaluation; no MLM specialized defense is introduced.
 
 ## Required reports; no invented success threshold
 

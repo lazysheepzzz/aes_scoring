@@ -104,8 +104,8 @@ eventually be evaluated on Injection, Rudimentary, HotFlip, and MLM-guided for
 the cross-robustness matrix.
 
 Do not use Injection pairs or results to revise the already frozen
-PAER-RH-v3 variant after looking at its Injection evaluation.  In the planned
-PAER-RHI-v3 primary experiment, Injection is explicitly included in training
-and checkpoint selection on the same footing as Rudimentary and HotFlip, and
-Mixed-AT-RHI must use the identical three-family training pool.  MLM-guided
-then remains the unseen family.
+PAER-RH-v3 method after looking at its Injection evaluation. PAER-RHI-v3 is an
+optional additional experiment in which Injection is included in training and
+checkpoint selection on the same footing as Rudimentary and HotFlip. If it is
+run, Mixed-AT-RHI must use the identical three-family training pool.
+MLM-guided remains attack-only transfer evaluation.

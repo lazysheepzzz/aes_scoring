@@ -238,10 +238,11 @@ attention alignment.
 Rudimentary, HotFlip, and Injection are the three peer attack--defense
 families: each has an undefended attack, a dedicated defense, and cross-defense
 evaluation. MLM-guided has no dedicated defense in the source protocol and is
-used only as attack-side transfer evaluation. PAER-RH-v3 sees R/H and is
-retained as a two-family variant. The planned primary PAER-RHI-v3 and its
-data-matched Mixed-AT-RHI baseline will see R/H/Injection symmetrically, while
-MLM-guided remains an unseen attack-only evaluation.
+used only as attack-side transfer evaluation. The completed PAER-RH-v3 is the
+formal proposed-method experiment: it sees R/H and measures transfer to unseen
+Injection and MLM. PAER-RHI-v3 is an optional three-family extension, not a
+replacement for the completed RH experiment. If run, it must be compared with
+a data-matched Mixed-AT-RHI baseline.
 
 ### V3 smoke test (execution only)
 
