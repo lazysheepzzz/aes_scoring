@@ -43,6 +43,7 @@ class AESMainExperimentMatrixTests(unittest.TestCase):
             row = collect_rows(outputs)[0]
 
             self.assertEqual(row["model"], "B0")
+            self.assertAlmostEqual(row["rh_macro_asr"], 0.75)
             self.assertAlmostEqual(row["rhi_macro_asr"], 0.6)
             self.assertEqual(row["mlm_guided_asr"], 0.5)
 

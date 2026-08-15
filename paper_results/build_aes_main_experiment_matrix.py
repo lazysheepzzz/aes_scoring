@@ -114,6 +114,7 @@ FIELDS = (
     "hotflip_avg_delta",
     "injection_asr",
     "injection_avg_delta",
+    "rh_macro_asr",
     "rhi_macro_asr",
     "mlm_guided_asr",
     "mlm_guided_avg_delta",
@@ -194,6 +195,12 @@ def collect_rows(outputs_dir: Path) -> list[dict[str, Any]]:
             if all(value is not None for value in primary_asrs)
             else None
         )
+        rh_asrs = (rudimentary["asr"], hotflip["asr"])
+        rh_macro = (
+            sum(float(value) for value in rh_asrs) / 2.0
+            if all(value is not None for value in rh_asrs)
+            else None
+        )
         rows.append(
             {
                 "model": spec["model"],
@@ -206,6 +213,7 @@ def collect_rows(outputs_dir: Path) -> list[dict[str, Any]]:
                 "hotflip_avg_delta": hotflip["avg_delta"],
                 "injection_asr": injection["asr"],
                 "injection_avg_delta": injection["avg_delta"],
+                "rh_macro_asr": rh_macro,
                 "rhi_macro_asr": rhi_macro,
                 "mlm_guided_asr": mlm["asr"],
                 "mlm_guided_avg_delta": mlm["avg_delta"],
@@ -222,24 +230,18 @@ def _format(value: Any) -> str:
     return str(value)
 
 
-def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
-    columns = (
-        ("Model", "model"),
-        ("Training exposure", "training_exposure"),
-        ("Clean QWK", "clean_qwk"),
-        ("Rudi ASR", "rudimentary_asr"),
-        ("HotFlip ASR", "hotflip_asr"),
-        ("Injection ASR", "injection_asr"),
-        ("RHI Macro ASR", "rhi_macro_asr"),
-        ("MLM ASR (attack-only)", "mlm_guided_asr"),
-    )
+def _write_markdown_table(
+    path: Path,
+    *,
+    title: str,
+    note: str,
+    rows: list[dict[str, Any]],
+    columns: tuple[tuple[str, str], ...],
+) -> None:
     lines = [
-        "# AES main experiment matrix (seed 42)",
+        f"# {title}",
         "",
-        (
-            "Rudimentary, HotFlip, and Injection are peer attack--defense "
-            "families. MLM-guided is attack-only transfer evaluation."
-        ),
+        note,
         "",
         "| " + " | ".join(label for label, _ in columns) + " |",
         "| " + " | ".join("---" for _ in columns) + " |",
@@ -251,6 +253,36 @@ def _write_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
             + " |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_tracking_markdown(path: Path, rows: list[dict[str, Any]]) -> None:
+    columns = (
+        ("Model", "model"),
+        ("Training exposure", "training_exposure"),
+        ("Clean QWK", "clean_qwk"),
+        ("Rudi ASR", "rudimentary_asr"),
+        ("HotFlip ASR", "hotflip_asr"),
+        ("Injection ASR", "injection_asr"),
+        ("RHI Macro ASR", "rhi_macro_asr"),
+        ("MLM ASR (attack-only)", "mlm_guided_asr"),
+    )
+    _write_markdown_table(
+        path,
+        title="AES complete experiment tracker (seed 42)",
+        note=(
+            "Rudimentary, HotFlip, and Injection are peer attack--defense "
+            "families. MLM-guided is attack-only transfer evaluation."
+        ),
+        rows=rows,
+        columns=columns,
+    )
+
+
+def _rows_by_name(
+    rows: list[dict[str, Any]], names: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    lookup = {row["model"]: row for row in rows}
+    return [lookup[name] for name in names]
 
 
 def main() -> int:
@@ -270,6 +302,9 @@ def main() -> int:
     json_path = args.out_dir / "aes_main_experiment_matrix_seed42.json"
     csv_path = args.out_dir / "aes_main_experiment_matrix_seed42.csv"
     markdown_path = args.out_dir / "aes_main_experiment_matrix_seed42.md"
+    primary_path = args.out_dir / "aes_primary_attack_defense_table_seed42.md"
+    mlm_path = args.out_dir / "aes_mlm_transfer_table_seed42.md"
+    ablation_path = args.out_dir / "aes_paer_ablation_table_seed42.md"
     json_path.write_text(
         json.dumps(
             {
@@ -293,11 +328,79 @@ def main() -> int:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    _write_markdown(markdown_path, rows)
+    _write_tracking_markdown(markdown_path, rows)
+    _write_markdown_table(
+        primary_path,
+        title="AES primary attack--defense results (seed 42)",
+        note=(
+            "Rudimentary, HotFlip, and Injection are the three peer "
+            "attack--defense families. Lower ASR is better."
+        ),
+        rows=_rows_by_name(
+            rows,
+            (
+                "B0",
+                "C0",
+                "D-HotFlip",
+                "D-Rudimentary-v2",
+                "D-Injection",
+                "Mixed-AT-RH",
+                "PAER-RH-v3",
+            ),
+        ),
+        columns=(
+            ("Model", "model"),
+            ("Training exposure", "training_exposure"),
+            ("Clean QWK", "clean_qwk"),
+            ("Rudi ASR", "rudimentary_asr"),
+            ("HotFlip ASR", "hotflip_asr"),
+            ("Injection ASR", "injection_asr"),
+            ("RHI Macro ASR", "rhi_macro_asr"),
+        ),
+    )
+    _write_markdown_table(
+        mlm_path,
+        title="AES MLM-guided attack-only transfer (seed 42)",
+        note=(
+            "MLM-guided has no dedicated defense. This table compares the "
+            "undefended/clean controls with the data-matched RH methods."
+        ),
+        rows=_rows_by_name(
+            rows, ("B0", "C0", "Mixed-AT-RH", "PAER-RH-v3")
+        ),
+        columns=(
+            ("Model", "model"),
+            ("Clean QWK", "clean_qwk"),
+            ("MLM ASR", "mlm_guided_asr"),
+            ("MLM Avg Delta", "mlm_guided_avg_delta"),
+        ),
+    )
+    _write_markdown_table(
+        ablation_path,
+        title="AES PAER development ablation (seed 42)",
+        note=(
+            "The ablation is restricted to the two attacks used by all RH "
+            "methods, so no unrun Injection/MLM cells are required."
+        ),
+        rows=_rows_by_name(
+            rows,
+            ("Mixed-AT-RH", "PAER-RH-v1", "PAER-RH-v2", "PAER-RH-v3"),
+        ),
+        columns=(
+            ("Model", "model"),
+            ("Clean QWK", "clean_qwk"),
+            ("Rudi ASR", "rudimentary_asr"),
+            ("HotFlip ASR", "hotflip_asr"),
+            ("RH Macro ASR", "rh_macro_asr"),
+        ),
+    )
 
     print(f"Saved: {json_path}")
     print(f"Saved: {csv_path}")
     print(f"Saved: {markdown_path}")
+    print(f"Saved: {primary_path}")
+    print(f"Saved: {mlm_path}")
+    print(f"Saved: {ablation_path}")
     return 0
 
 
