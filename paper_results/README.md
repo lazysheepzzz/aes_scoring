@@ -30,4 +30,5 @@ python .\paper_results\bootstrap_paer_v3_vs_mixed_at.py
 This resamples the 1,154 validation essay identities and reports PAER's ASR
 reduction relative to the data-matched Mixed-AT baseline for each attack, the
 R/H/I macro, and MLM attack-only transfer. It uses existing results only and
-does not require a GPU.
+does not require a GPU. The interval describes essay-sampling uncertainty for
+the already selected checkpoints; it does not measure training-seed variance.

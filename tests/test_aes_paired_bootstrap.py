@@ -25,6 +25,7 @@ class AESPairedBootstrapTests(unittest.TestCase):
         self.assertGreater(
             result["bootstrap_probability_reduction_gt_0"], 0.8
         )
+        self.assertGreater(result["two_sided_bootstrap_p"], 0.0)
 
     def test_rejects_unaligned_shapes(self):
         with self.assertRaises(ValueError):

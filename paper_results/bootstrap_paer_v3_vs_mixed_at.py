@@ -120,9 +120,15 @@ def bootstrap_reduction(
         reductions[start:stop] = paired_reduction[indices].mean(axis=1)
     observed_reduction = float(paired_reduction.mean())
     probability_improvement = float(np.mean(reductions > 0.0))
-    two_sided_p = float(
-        min(1.0, 2.0 * min(np.mean(reductions <= 0.0), np.mean(reductions >= 0.0)))
+    # Add-one correction prevents impossible claims of p=0 when a finite
+    # number of bootstrap replicates contains no reversal.
+    lower_tail = (float(np.count_nonzero(reductions <= 0.0)) + 1.0) / (
+        n_bootstrap + 1.0
     )
+    upper_tail = (float(np.count_nonzero(reductions >= 0.0)) + 1.0) / (
+        n_bootstrap + 1.0
+    )
+    two_sided_p = float(min(1.0, 2.0 * min(lower_tail, upper_tail)))
     return {
         "n_essays": int(baseline.size),
         "baseline_asr": float(baseline.mean()),
@@ -209,6 +215,10 @@ def compute_report(
             "n_bootstrap": n_bootstrap,
             "bootstrap_seed": seed,
             "positive_reduction_means": "lower ASR for PAER-RH-v3",
+            "inference_scope": (
+                "essay-sampling uncertainty conditional on the selected "
+                "checkpoints and validation fold; not training-seed variance"
+            ),
             "injection_aggregation": "equal mean of external and self-duplication",
             "rhi_aggregation": "equal mean of Rudimentary, HotFlip, and Injection family",
         },
@@ -239,6 +249,10 @@ def write_markdown(path: Path, report: dict[str, Any]) -> None:
         "# PAER-RH-v3 vs Mixed-AT-RH paired bootstrap (seed 42)",
         "",
         "Positive reduction means lower ASR for PAER-RH-v3.",
+        (
+            "Intervals quantify paired essay-sampling uncertainty conditional "
+            "on the selected checkpoints; they do not replace training seeds."
+        ),
         "",
         "| Attack | Mixed ASR | PAER ASR | ASR reduction | 95% CI | P(reduction > 0) | Two-sided p |",
         "| --- | --- | --- | --- | --- | --- | --- |",
