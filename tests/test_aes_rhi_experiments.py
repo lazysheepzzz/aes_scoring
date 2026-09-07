@@ -14,6 +14,8 @@ from paer.aes_rhi_training_launcher import build_parser, main as launch_training
 from paer import select_aes_rhi_checkpoint as selector
 from paer import evaluate_aes_rhi_experiments as evaluator
 from paer import prepare_aes_rhi_training_traces as preparation
+from paer.finalize_aes_rhi_training_pool import finalize
+from paer.rhi_experiment_utils import checkpoint_identity
 
 
 def record(i, attack, order=1):
@@ -25,6 +27,80 @@ def record(i, attack, order=1):
 
 
 class RHIProtocolTests(unittest.TestCase):
+    def test_local_recovery_can_have_signed_cumulative_gain(self):
+        rows = [{"text": f"Essay {i}", "score": 3.0} for i in range(6)]
+        records = [record(i, a) for i, a in enumerate(
+            ("rudimentary", "rudimentary", "hotflip", "hotflip", "injection_external", "injection_self_dup"))]
+        records[2]["cumulative_delta"] = -0.03
+        records[3]["cumulative_delta"] = 0.0
+        validate_trace_groups(records, rows)
+        self.assertEqual(records[2]["cumulative_delta"], -0.03)
+        for field, values in (("step_gain", (0, -0.1, float("nan"), float("inf"))),
+                              ("cumulative_delta", (float("nan"), float("inf"), -float("inf")))):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    bad = [dict(r) for r in records]
+                    bad[2][field] = value
+                    with self.assertRaisesRegex(ValueError, "record_id=.*hotflip"):
+                        validate_trace_groups(bad, rows)
+
+    def test_cpu_finalizer_reuses_legacy_shards_and_guards_provenance(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            train, rh, bank, ckpt, out = (root / n for n in ("train.csv", "rh.jsonl", "bank.txt", "b0", "pool"))
+            train.write_text("essay_id,score,full_text\n" + "".join(f"{i},3,Essay {i}\n" for i in range(60)))
+            bank.write_text("External sentence.\n")
+            ckpt.mkdir()
+            (ckpt / "model.safetensors").write_bytes(b"frozen")
+            source = [record(i, "hotflip" if i % 2 else "rudimentary") for i in range(50)]
+            for r in source:
+                if r["attack"] == "hotflip":
+                    r["cumulative_delta"] = -0.03
+            rh.write_text("".join(json.dumps(r) + "\n" for r in source))
+            save_json(rh.with_suffix(".manifest.json"), {"n_steps": 3})
+            rows = preparation.load_rows(train)
+            groups, jobs = allocate_rhi(rows, source, 0.5, 42)
+            files = ("paer/prepare_aes_rhi_training_traces.py", "paer/rhi_experiment_utils.py",
+                     "text_scoring_adv_training/evaluation/aes/scorer.py",
+                     "text_scoring_adv_training/evaluation/aes/attacks/injection.py")
+            protocol = {
+                "protocol": "balanced_rhi_positive_trajectories_v1", "mlm_excluded": True,
+                "arguments": {"train_csv": str(train), "rh_traces": str(rh), "sentence_bank": str(bank),
+                              "checkpoint": str(ckpt), "attack_fraction": 0.5, "seed": 42},
+                "source_hashes": {k: sha256(p) for k, p in
+                                  {"train": train, "rh": rh, "rh_manifest": rh.with_suffix(".manifest.json"), "bank": bank}.items()},
+                "checkpoint": checkpoint_identity(ckpt),
+                "generation_code": {p: sha256(preparation.ROOT / p) for p in files},
+                "rh_rows": sorted(groups), "injection_jobs": {str(i): a for i, a in jobs.items()},
+            }
+            # A completed run bound before the validator repair.
+            protocol["generation_code"]["paer/rhi_experiment_utils.py"] = "legacy-validator-hash"
+            bind_directory(out, protocol)
+            with self.assertRaisesRegex(FileNotFoundError, "missing shard"):
+                finalize(out)
+            for i, a in jobs.items():
+                save_json(out / "injection_essay_progress" / f"row_{i}.json", {"records": [record(i, a)]})
+            preserved = {p: sha256(p) for p in out.rglob("*.json")}
+            preserved[rh] = sha256(rh)
+            bank.write_text("Changed bank")
+            with self.assertRaisesRegex(ValueError, "input changed: bank"):
+                finalize(out)
+            bank.write_text("External sentence.\n")
+            with patch("paer.finalize_aes_rhi_training_pool.ROOT", root):
+                with self.assertRaises(FileNotFoundError):
+                    finalize(out)  # Search source cannot be silently exempted.
+            with patch.dict("sys.modules", {"torch": None, "transformers": None}):
+                self.assertEqual(finalize(out), 0)
+                self.assertEqual(finalize(out), 0)
+            self.assertEqual(preserved, {p: sha256(p) for p in preserved})
+            manifest = read_json(out / "rhi_counterfactual_training_traces.manifest.json")
+            self.assertEqual(list(manifest["essay_counts_by_attack"].values()), [10, 10, 5, 5])
+            self.assertEqual(manifest["finalization"]["nonpositive_cumulative_trace_counts_by_attack"], {"hotflip": 10})
+            target = out / "rhi_counterfactual_training_traces.jsonl"
+            target.write_text("tampered")
+            with self.assertRaisesRegex(ValueError, "pool was modified"):
+                finalize(out)
+
     def test_macro_does_not_double_weight_injection(self):
         self.assertAlmostEqual(rhi_macro(0.9, 0.6, 0.2, 0.4), 0.6)
         self.assertNotAlmostEqual(rhi_macro(0.9, 0.6, 0.2, 0.4), (0.9 + 0.6 + 0.2 + 0.4) / 4)

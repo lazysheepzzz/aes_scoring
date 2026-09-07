@@ -72,8 +72,15 @@ def validate_trace_groups(records, clean_rows):
         if record["original_text"] != row["text"] or float(record["label_score_space"]) != row["score"]:
             raise ValueError(f"Trace text/label differs from training CSV at row {row_index}")
         for key in ("step_gain", "cumulative_delta"):
-            if not math.isfinite(float(record[key])) or float(record[key]) <= 0:
-                raise ValueError(f"Invalid positive score gain: {key}")
+            value = float(record[key])
+            # A local recovery in a HotFlip search may still lie below the
+            # original essay score. Keep its signed cumulative delta intact;
+            # the trainer already clamps only the correction target to zero.
+            if not math.isfinite(value) or (key == "step_gain" and value <= 0):
+                raise ValueError(
+                    f"Invalid score gain: {key}={value}; "
+                    f"record_id={record['record_id']}, attack={attack}, row={row_index}"
+                )
         if not record["before_text"] or not record["adversarial_text"]:
             raise ValueError("Empty trace text")
         if record["record_id"] in ids:

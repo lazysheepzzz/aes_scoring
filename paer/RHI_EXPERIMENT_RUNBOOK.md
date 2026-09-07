@@ -19,9 +19,35 @@
 
 ## 文件与输出管理
 
+### 生成 100% 后因 cumulative_delta 校验失败的恢复
+
+`step_gain` 是相对上一步的增分；`cumulative_delta` 是相对原作文的
+有符号分差。HotFlip 搜索可先降分后回升，所以前者为正并不要求后者为正。
+校验现要求 step_gain 有限且为正、cumulative_delta 有限；不删除或改写原始记录。
+训练器已有的非负 correction target 截断保持不变。
+
+旧版本的目录绑定包含旧校验器哈希，修复后不要直接重跑生成命令，也不要删除目录。
+同步代码后在远程项目根目录运行：
+
+```powershell
+python .\paer\finalize_aes_rhi_training_pool.py `
+  --output-dir .\artifacts\paer\rhi_training_pool_seed42
+
+Get-Content .\artifacts\paer\rhi_training_pool_seed42\rhi_counterfactual_training_traces.manifest.json
+```
+
+该入口验证原训练数据、RH 轨迹、句子库、模型权重、搜索代码和逐篇任务分配，
+要求所有 Injection 分片存在；不加载 GPU 或补跑缺失任务。
+仅允许此次校验工具变更，保留原目录绑定，并在新 manifest 中记录合并工具及分片哈希。
+`finalization.nonpositive_cumulative_trace_counts_by_attack` 给出保留记录的实际统计。
+已完成且哈希匹配的训练池再次调用会直接返回，不覆盖旧结果。
+若提示输入、代码变化或缺少分片，应保留目录并检查报错，不绕过保护。
+Mixed-AT-RHI 和 PAER-RHI-v3 继续读取同一个最终训练池，家族配比不变。
+
 | 位置 | 作用 |
 | --- | --- |
 | `paer/prepare_aes_rhi_training_traces.py` | RH 复用与新的 Injection 轨迹生成 |
+| `paer/finalize_aes_rhi_training_pool.py` | 已完成逐篇生成后，仅用 CPU 校验并合并训练池 |
 | `paer/run_aes_mixed_at_rhi_training.py` | 普通三家族联合训练 |
 | `paer/run_aes_paer_rhi_training.py` | 当前 PAER-v3 结构的三家族联合训练 |
 | `paer/select_aes_rhi_checkpoint.py` | 两个模型共用的 RHI 选模 |
