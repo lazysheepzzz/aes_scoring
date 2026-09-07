@@ -102,8 +102,15 @@ class RHTrainingConfig:
     max_trace_records: int | None = None
     max_train_samples: int | None = None
     max_valid_samples: int | None = None
+    # Opt-in RHI extension; historical RH entrypoints retain their behavior.
+    experiment_name: str | None = None
+    training_attacks: tuple[str, ...] = ("rudimentary", "hotflip")
 
     def __post_init__(self) -> None:
+        allowed_sets = ({"rudimentary", "hotflip"},
+                        {"rudimentary", "hotflip", "injection_external", "injection_self_dup"})
+        if set(self.training_attacks) not in allowed_sets:
+            raise ValueError("Training exposure must be RH or RHI; MLM is evaluation-only")
         if self.training_mode not in TRAINING_MODES:
             raise ValueError(f"Unknown training_mode: {self.training_mode}")
         if self.precision not in ("bfloat16", "float32"):
@@ -154,7 +161,8 @@ class RHTrainingConfig:
 
 
 class CounterfactualTraceDataset(Dataset):
-    def __init__(self, path: str | Path, max_records: int | None = None):
+    def __init__(self, path: str | Path, max_records: int | None = None,
+                 allowed_attacks=("rudimentary", "hotflip")):
         self.path = Path(path)
         self.items: list[dict[str, Any]] = []
         seen_record_ids: set[str] = set()
@@ -178,7 +186,7 @@ class CounterfactualTraceDataset(Dataset):
                     )
                 if float(item["step_gain"]) <= 0:
                     continue
-                if item["attack"] not in ("rudimentary", "hotflip"):
+                if item["attack"] not in allowed_attacks:
                     raise ValueError(
                         f"Unexpected training attack at line {line_number}: "
                         f"{item['attack']!r}; MLM must remain held out"
@@ -584,7 +592,7 @@ class RHTrainer:
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
 
-        print(f"Loading {config.training_mode} from {config.checkpoint_path}...", flush=True)
+        print(f"Loading {config.experiment_name or config.training_mode} from {config.checkpoint_path}...", flush=True)
         if config.training_mode == PAER_RH_V3:
             self.model = PAERV3ForEssayScoring.from_base_checkpoint(
                 config.checkpoint_path,
@@ -621,6 +629,7 @@ class RHTrainer:
         self.trace_dataset = CounterfactualTraceDataset(
             config.trace_jsonl,
             max_records=config.max_trace_records,
+            allowed_attacks=config.training_attacks,
         )
         self.train_dataset = PairedEssayTrainingDataset(
             config.train_csv,
@@ -643,10 +652,10 @@ class RHTrainer:
         attack_counts: dict[str, int] = {}
         for item in self.trace_dataset.items:
             attack_counts[item["attack"]] = attack_counts.get(item["attack"], 0) + 1
-        missing_attacks = {"rudimentary", "hotflip"} - set(attack_counts)
+        missing_attacks = set(config.training_attacks) - set(attack_counts)
         if missing_attacks:
             raise ValueError(
-                "The shared RH trace dataset must contain both training "
+                "The shared trace dataset must contain all configured training "
                 f"attacks; missing {sorted(missing_attacks)}"
             )
         print(
@@ -695,8 +704,12 @@ class RHTrainer:
                 ],
                 "attack_only_transfer_evaluation": "mlm_guided",
                 "training_exposure": {
-                    "seen": ["rudimentary", "hotflip"],
-                    "unseen": ["injection_family", "mlm_guided"],
+                    "seen": (["rudimentary", "hotflip", "injection_family"]
+                             if "injection_external" in config.training_attacks
+                             else ["rudimentary", "hotflip"]),
+                    "unseen": (["mlm_guided"]
+                               if "injection_external" in config.training_attacks
+                               else ["injection_family", "mlm_guided"]),
                 },
                 "experiment_taxonomy": (
                     "rudimentary_hotflip_injection_are_peer_attack_defense_"
@@ -1008,7 +1021,7 @@ class RHTrainer:
             self.train_dataset.set_epoch(epoch)
             progress = tqdm(
                 loader,
-                desc=f"{cfg.training_mode} epoch {epoch + 1}/{cfg.num_epochs}",
+                desc=f"{cfg.experiment_name or cfg.training_mode} epoch {epoch + 1}/{cfg.num_epochs}",
                 unit="batch",
                 dynamic_ncols=True,
                 disable=True if not cfg.show_progress else None,

@@ -1,5 +1,12 @@
 # PAER-AES main experiment
 
+## 当前主线：三家族 RHI 联合训练
+
+新实验入口和远程完整命令见 [RHI_EXPERIMENT_RUNBOOK.md](RHI_EXPERIMENT_RUNBOOK.md)。
+Mixed-AT-RHI 与 PAER-RHI 同时使用 Rudimentary、HotFlip、Injection 训练和选模，
+MLM 仅作冻结后的未见攻击评估。以下原有 RH 说明保留为历史实验文档。
+新 RHI 入口不会覆盖原来的训练池、checkpoint 或评估结果。
+
 This directory contains the new AES contribution.  It does not replace the
 original paper's shared attack primitives under
 `text_scoring_adv_training/evaluation/robustness_tests/common/`.

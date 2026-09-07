@@ -1,5 +1,13 @@
 # AES MLM-guided attack-only transfer evaluation
 
+## 补齐三个已训练专用防御的 MLM 列
+
+运行 `python .\mlm_guided\evaluate_aes_specialist_defenses_mlm.py`，顺序评估
+已选定的 D-HotFlip、D-Rudimentary-v2、D-Injection。默认 batch=4，输出到新的
+`outputs/aes_specialists_mlm_evaluation_development_seed42/`，不覆盖旧结果。
+可先加 `--dry-run` 检查 checkpoint。详细规则见
+[RHI 运行说明](../paer/RHI_EXPERIMENT_RUNBOOK.md)。
+
 MLM-guided has no dedicated adversarial-training defense in the source
 protocol. It is evaluated after model and checkpoint selection as an unseen
 attack-side transfer test. Rudimentary, HotFlip, and Injection remain the
