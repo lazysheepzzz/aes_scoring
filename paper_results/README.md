@@ -32,3 +32,4 @@ reduction relative to the data-matched Mixed-AT baseline for each attack, the
 R/H/I macro, and MLM attack-only transfer. It uses existing results only and
 does not require a GPU. The interval describes essay-sampling uncertainty for
 the already selected checkpoints; it does not measure training-seed variance.
+-
