@@ -52,6 +52,23 @@ For a different training seed, pass the corresponding full-model
 
 ## Selection and evaluation protocol
 
+After full training, the sequential orchestration command is:
+
+```powershell
+python .\paer\evaluate_aes_paer_rhi_ablations.py --dry-run
+python .\paer\evaluate_aes_paer_rhi_ablations.py
+```
+
+It reads the original full-model selection arguments and full evaluation binding,
+validates ablation inputs/configurations, then selects and evaluates each variant.
+It does not train. Default outputs are isolated under
+`outputs/aes_paer_rhi_v3_retrained_ablations_seed42`; the top-level summary is
+`ablation_results.md`. Dry-run validates inputs and prints selection commands,
+but cannot determine future selected checkpoints or execute GPU evaluations.
+Completed outputs are hash-checked and reused. Partial full evaluations are
+preserved and rejected; use a new output directory if such a run is interrupted.
+Unchanged selector-owned partial selection work can be resumed.
+
 Reuse the existing RHI selector with NEW defense/selection directories. Match
 the full model's original selection manifest exactly: same C0 gate, data/subset,
 attack seed, R/H/I budgets, dtype, and maximum checkpoint step (1400 in the

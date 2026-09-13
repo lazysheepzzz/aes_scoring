@@ -24,6 +24,7 @@ def build_parser():
                         selection_output_dir=ROOT / "outputs/aes_paer_rhi_v3_checkpoint_selection_seed42",
                         subset_ids_path=None, batch_size=4)
     parser.add_argument("--injection-selection-steps", type=int, default=30)
+    parser.add_argument("--training-inputs", type=Path, help="Explicit provenance for a verified retrained ablation")
     return parser
 
 
@@ -65,7 +66,7 @@ def main():
         args.subset_ids_path = args.selection_output_dir / "subset_ids.json"
     if not args.subset_ids_path.resolve().is_relative_to(args.selection_output_dir.resolve()):
         raise ValueError("Use subset IDs within this new selection directory; historical IDs stay untouched")
-    inputs = read_json(args.defense_output_dir / "rhi_training_inputs.json")
+    inputs = read_json(args.training_inputs or args.defense_output_dir / "rhi_training_inputs.json")
     if inputs["valid_sha256"] != sha256(args.valid_csv):
         raise ValueError("Selection CSV differs from the recorded training development split")
     candidates, excluded = restrict_candidates_to_common_budget(
@@ -75,7 +76,8 @@ def main():
         "held_out_attack": "mlm_guided", "mlm_used_for_selection": False,
         "aggregation": "(R + H + (external + self_dup)/2)/3",
         "arguments": {k: str(v.resolve()) if isinstance(v, Path) else v for k, v in vars(args).items()
-                      if k not in ("dry_run", "no_progress", "online", "force")},
+                      if k not in ("dry_run", "no_progress", "online", "force")
+                      and not (k == "training_inputs" and v is None)},
         "valid_sha256": sha256(args.valid_csv), "bank_sha256": sha256(args.injection_sentence_bank),
         "training_inputs": inputs, "c0_weights": checkpoint_identity(args.c0_checkpoint),
         "candidate_weights": {p.name: checkpoint_identity(p) for p in candidates},
