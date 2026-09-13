@@ -12,6 +12,10 @@ from paer.run_aes_paer_rhi_ablation_training import ABLATIONS, ablated_config, v
 
 def selection_arguments(reference, training_dir, output_dir):
     args = dict(reference)
+    # argparse.set_defaults stores this internal field in vars(args), hence in
+    # historical bindings, but it is not a CLI option. RHI selects all three
+    # families itself; retain its default rather than passing --attack.
+    args.pop("attack", None)
     args.update(defense_output_dir=str(training_dir), selection_output_dir=str(output_dir),
                 subset_ids_path=str(output_dir / "subset_ids.json"),
                 training_inputs=str(training_dir / "reference_rhi_training_inputs.json"))
