@@ -264,6 +264,12 @@ class RHIProtocolTests(unittest.TestCase):
                 self.assertEqual(selector.main(), 0)
                 self.assertEqual(len(calls), 6)  # completed selection is immutable/reused
 
+    def test_rhi_selection_uses_uniform_thirty_step_budget(self):
+        args = selector.build_parser().parse_args([])
+        self.assertEqual(args.rudimentary_selection_steps, 30)
+        self.assertEqual(args.selection_steps, 30)
+        self.assertEqual(args.injection_selection_steps, 30)
+
     def test_specialist_mlm_runner_uses_selected_weights_and_all_rows(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

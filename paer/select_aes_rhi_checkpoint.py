@@ -22,7 +22,12 @@ def build_parser():
     parser.description = "Select an RHI model with three equally weighted families; MLM forbidden."
     parser.set_defaults(defense_output_dir=ROOT / "outputs/aes_paer_rhi_v3_seed42",
                         selection_output_dir=ROOT / "outputs/aes_paer_rhi_v3_checkpoint_selection_seed42",
-                        subset_ids_path=None, batch_size=4)
+                        subset_ids_path=None, batch_size=4,
+                        # R/H/I are peer attack families in the formal RHI
+                        # protocol.  Use the same 30-step selection ceiling for
+                        # all three instead of inheriting the historical
+                        # 10-step HotFlip budget from the earlier RH protocol.
+                        selection_steps=30)
     parser.add_argument("--injection-selection-steps", type=int, default=30)
     parser.add_argument("--training-inputs", type=Path, help="Explicit provenance for a verified retrained ablation")
     return parser
