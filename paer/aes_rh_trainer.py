@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from paer.modeling_paer import PAERForEssayScoring
 from paer.modeling_paer_v3 import PAERV3ForEssayScoring
+from paer.rhi_experiment_utils import training_families
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.training.aes_trainer import (
     build_adamw_parameter_groups,
@@ -102,15 +103,12 @@ class RHTrainingConfig:
     max_trace_records: int | None = None
     max_train_samples: int | None = None
     max_valid_samples: int | None = None
-    # Opt-in RHI extension; historical RH entrypoints retain their behavior.
+    # Opt-in exposure extensions; historical RH/RHI defaults retain their behavior.
     experiment_name: str | None = None
     training_attacks: tuple[str, ...] = ("rudimentary", "hotflip")
 
     def __post_init__(self) -> None:
-        allowed_sets = ({"rudimentary", "hotflip"},
-                        {"rudimentary", "hotflip", "injection_external", "injection_self_dup"})
-        if set(self.training_attacks) not in allowed_sets:
-            raise ValueError("Training exposure must be RH or RHI; MLM is evaluation-only")
+        training_families(self.training_attacks)
         if self.training_mode not in TRAINING_MODES:
             raise ValueError(f"Unknown training_mode: {self.training_mode}")
         if self.precision not in ("bfloat16", "float32"):
@@ -704,12 +702,10 @@ class RHTrainer:
                 ],
                 "attack_only_transfer_evaluation": "mlm_guided",
                 "training_exposure": {
-                    "seen": (["rudimentary", "hotflip", "injection_family"]
-                             if "injection_external" in config.training_attacks
-                             else ["rudimentary", "hotflip"]),
-                    "unseen": (["mlm_guided"]
-                               if "injection_external" in config.training_attacks
-                               else ["injection_family", "mlm_guided"]),
+                    "seen": training_families(config.training_attacks),
+                    "unseen": [family for family in (
+                        "rudimentary", "hotflip", "injection_family", "mlm_guided"
+                    ) if family not in training_families(config.training_attacks)],
                 },
                 "experiment_taxonomy": (
                     "rudimentary_hotflip_injection_are_peer_attack_defense_"

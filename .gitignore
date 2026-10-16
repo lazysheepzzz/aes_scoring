@@ -10,7 +10,6 @@ outputs/
 artifacts/
 .cache/
 IEEE Transactions on Learning Technologies的模板
-paper
 results.xlsx
 tmp
 .codex-finalizer
@@ -20,3 +19,4 @@ aes_main_results_summary_2026-10-07.md
 CLAUDE.md
 paper_results
 .ppt_speech_inspect
+paper

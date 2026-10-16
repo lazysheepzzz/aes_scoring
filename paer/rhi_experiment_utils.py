@@ -9,6 +9,22 @@ ROOT = Path(__file__).resolve().parents[1]
 RHI_ATTACKS = ("rudimentary", "hotflip", "injection_external", "injection_self_dup")
 
 
+def training_families(attacks):
+    """Validate exposure, including the opt-in single-family study."""
+    attacks = tuple(attacks)
+    allowed = (
+        {"rudimentary"}, {"hotflip"},
+        {"injection_external", "injection_self_dup"},
+        {"rudimentary", "hotflip"}, set(RHI_ATTACKS),
+    )
+    if len(attacks) != len(set(attacks)) or set(attacks) not in allowed:
+        raise ValueError("Training exposure must be R, H, I, RH or RHI; MLM is evaluation-only")
+    return [family for family, members in (
+        ("rudimentary", {"rudimentary"}), ("hotflip", {"hotflip"}),
+        ("injection_family", {"injection_external", "injection_self_dup"}),
+    ) if members <= set(attacks)]
+
+
 def sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
