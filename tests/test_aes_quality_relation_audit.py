@@ -127,6 +127,65 @@ class AuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "30 steps"):
             self.prepare()
 
+    def test_legacy_hotflip_manifest_uses_recorded_parameters(self):
+        path = Path(self.mapping["b0"]["hotflip"]).parent / "run_manifest.json"
+        manifest = q.read_json(path)
+        manifest["hotflip"] = manifest.pop("attack_parameters")
+        q.save_json(path, manifest)
+        original_hash = q.file_hash(path)
+        self.prepare()
+        exported = q.read_json(self.audit / "source_manifest.json")
+        source = next(s for s in exported["sources"] if s["model"] == "b0" and s["attack"] == "hotflip")
+        self.assertEqual(source["parameter_schema"], "legacy_hotflip")
+        self.assertEqual(source["recorded_attack_parameters"]["n_steps"], 30)
+        self.assertEqual(q.file_hash(path), original_hash)
+
+    def test_invalid_old_candidate_does_not_hide_valid_full_evaluation(self):
+        path = Path(self.mapping["b0"]["rudimentary"])
+        old = self.project / "outputs/aaa_legacy_rudimentary"
+        q.save_json(old / path.name, q.read_json(path))
+        manifest = q.read_json(path.parent / "run_manifest.json")
+        manifest["hotflip"] = manifest.pop("attack_parameters")
+        q.save_json(old / "run_manifest.json", manifest)
+        self.prepare()
+        exported = q.read_json(self.audit / "source_manifest.json")
+        source = next(s for s in exported["sources"] if s["model"] == "b0" and s["attack"] == "rudimentary")
+        self.assertEqual(source["path"], str(path.resolve()))
+        self.assertEqual(len(source["skipped_candidates"]), 1)
+        self.assertIn("unavailable", source["skipped_candidates"][0]["reason"])
+
+    def test_missing_parameters_no_defaults_or_keyerror(self):
+        path = Path(self.mapping["b0"]["hotflip"]).parent / "run_manifest.json"
+        manifest = q.read_json(path)
+        manifest.pop("attack_parameters")
+        q.save_json(path, manifest)
+        with self.assertRaisesRegex(FileNotFoundError, "parameters unavailable"):
+            self.prepare()
+        self.assertFalse(self.audit.exists())
+
+    def test_legacy_hotflip_settings_not_adopted_for_r_or_i(self):
+        legacy = {"hotflip": {"n_steps": 30, "beam_size": 1, "max_candidates_per_step": 16}}
+        for attack in ("rudimentary", "injection_external", "injection_self_dup"):
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                q.source_attack_parameters(legacy, attack, "old/run_manifest.json")
+
+    def test_actual_hotflip_position_budget_mismatch_rejected(self):
+        for model, value in (("b0", 8), ("mixed", 8), ("paer", 16)):
+            path = Path(self.mapping[model]["hotflip"]).parent / "run_manifest.json"
+            manifest = q.read_json(path)
+            manifest["attack_parameters"]["n_sample_pos"] = value
+            q.save_json(path, manifest)
+        with self.assertRaisesRegex(ValueError, "parameters differ"):
+            self.prepare()
+
+    def test_inactive_injection_fields_do_not_cause_false_mismatch(self):
+        for model, value in (("b0", None), ("mixed", 0.1), ("paer", 0.05)):
+            path = Path(self.mapping[model]["injection_self_dup"]).parent / "run_manifest.json"
+            manifest = q.read_json(path)
+            manifest["attack_parameters"].update(max_token_edit_rate=value, sentence_bank_sha256=model)
+            q.save_json(path, manifest)
+        self.prepare()
+
     def test_parser_direction_and_invalid_evidence(self):
         pair = {"original_text": "Good essay.", "modified_text": "Bad essay."}
         text = response("improved")["choices"][0]["message"]["content"]

@@ -146,6 +146,28 @@ def expected_checkpoints(project, seed):
     return result, selections
 
 
+def source_attack_parameters(manifest, attack, manifest_path):
+    """Read recorded settings, never infer a historical budget from current defaults.
+
+    Git history before 4a0e9ed stored a `hotflip` object for every run, but
+    those settings only controlled HotFlip; old R/I had different algorithms.
+    It is therefore unsafe to adopt that object for another attack family.
+    """
+    if "attack_parameters" in manifest:
+        params, schema = manifest["attack_parameters"], "attack_parameters"
+    elif attack == "hotflip" and isinstance(manifest.get("hotflip"), dict):
+        params, schema = manifest["hotflip"], "legacy_hotflip"
+    else:
+        raise ValueError(f"Recorded attack parameters unavailable for {attack}; "
+                         f"manifest keys={sorted(manifest)}; {manifest_path}")
+    if not isinstance(params, dict):
+        raise ValueError(f"Attack parameters must be an object: {manifest_path}")
+    missing = [key for key in ("n_steps", "beam_size", "max_candidates_per_step") if key not in params]
+    if missing:
+        raise ValueError(f"Recorded attack parameters missing {missing}: {manifest_path}")
+    return params, schema
+
+
 def load_source(path, *, model, attack, victim, project, valid, seed):
     path = Path(path).resolve()
     manifest_path = path.parent / "run_manifest.json"
@@ -156,7 +178,7 @@ def load_source(path, *, model, attack, victim, project, valid, seed):
         raise ValueError(f"Wrong seed/count: {manifest_path}")
     if resolve_path(manifest["data"], project) != (project / "data/valid_fold0.csv").resolve():
         raise ValueError(f"Unexpected validation CSV: {manifest_path}")
-    params = manifest["attack_parameters"]
+    params, schema = source_attack_parameters(manifest, attack, manifest_path)
     if int(params["n_steps"]) != 30 or int(params["beam_size"]) != 1:
         raise ValueError(f"Expected 30 steps and beam one: {path}")
     if float(manifest["success_threshold"]) != 0.1:
@@ -175,12 +197,24 @@ def load_source(path, *, model, attack, victim, project, valid, seed):
         if not math.isfinite(old) or not math.isfinite(new) or abs(new - old - float(row["delta"])) > 1e-5:
             raise ValueError(f"Invalid score delta: {path}")
         records[key] = row
-    policy = {k: params.get(k) for k in ("n_steps", "beam_size", "max_candidates_per_step",
-              "max_token_edit_rate", "token_edit_rate_cap", "sentence_bank_sha256")}
+    # Compare effective settings. Injection ignores the token substitution cap,
+    # and self-duplication does not use the external bank even if a family
+    # manifest records both. Retain unknowns as None, never invent values.
+    keys = ["n_steps", "beam_size", "max_candidates_per_step"]
+    if attack in ("rudimentary", "hotflip"):
+        keys += ["max_token_edit_rate"]
+    if attack == "hotflip":
+        keys += ["n_sample_pos", "top_k_per_pos"]
+    if attack.startswith("injection_"):
+        keys += ["token_edit_rate_cap"]
+    if attack == "injection_external":
+        keys += ["sentence_bank_sha256"]
+    policy = {k: params.get(k) for k in keys}
     return {"records": records, "policy": policy, "content_hash": fingerprint(payload),
             "source": {"model": model, "attack": attack, "path": str(path), "sha256": file_hash(path),
                        "manifest_path": str(manifest_path), "manifest_sha256": file_hash(manifest_path),
-                       "victim": str(victim)}}
+                       "victim": str(victim), "parameter_schema": schema,
+                       "recorded_attack_parameters": params}}
 
 
 def discover_sources(project, valid, seed, explicit=None):
@@ -190,7 +224,7 @@ def discover_sources(project, valid, seed, explicit=None):
         for attack in ATTACKS:
             paths = ([resolve_path(explicit[model][attack], project)] if explicit is not None
                      else sorted((project / "outputs").rglob(f"{attack}_details.json")))
-            accepted = []
+            accepted, rejected = [], []
             for path in paths:
                 manifest_path = path.parent / "run_manifest.json"
                 if not manifest_path.is_file():
@@ -200,16 +234,27 @@ def discover_sources(project, valid, seed, explicit=None):
                     continue
                 if int(manifest.get("n_essays", -1)) != len(valid) or manifest.get("seed") != seed:
                     continue
-                accepted.append(load_source(path, model=model, attack=attack, victim=victims[model],
-                                            project=project, valid=valid, seed=seed))
+                try:
+                    accepted.append(load_source(path, model=model, attack=attack, victim=victims[model],
+                                                project=project, valid=valid, seed=seed))
+                except (ValueError, KeyError, TypeError) as exc:
+                    if explicit is not None:
+                        raise ValueError(f"Invalid explicitly selected source {path}: {exc}") from exc
+                    rejected.append({"path": str(path), "reason": str(exc),
+                                     "manifest_sha256": file_hash(manifest_path)})
+                    print(f"[SKIP SOURCE] {model}/{attack}: {path}: {exc}", flush=True)
             if not accepted:
                 raise FileNotFoundError(f"No matching full evaluation: {model}/{attack}. "
-                                        "No attacks launched. Supply --sources-json if needed.")
+                                        f"No attacks launched. Rejected candidates: {rejected}. "
+                                        "Inspect these manifests; do not regenerate attacks yet.")
             if len({item["content_hash"] for item in accepted}) != 1:
                 candidates = [item["source"]["path"] for item in accepted]
                 raise ValueError(f"Different matching evaluations: {model}/{attack}; select with "
                                  f"--sources-json. Candidates: {candidates}")
             found[(model, attack)] = accepted[0]
+            found[(model, attack)]["source"]["skipped_candidates"] = rejected
+            print(f"[SOURCE] {model}/{attack}: {accepted[0]['source']['path']} "
+                  f"(schema={accepted[0]['source']['parameter_schema']})", flush=True)
     for attack in ATTACKS:
         if len({fingerprint(found[(m, attack)]["policy"]) for m in MODELS}) != 1:
             raise ValueError(f"Attack parameters differ across models: {attack}")
