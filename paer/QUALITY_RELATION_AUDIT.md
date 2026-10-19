@@ -140,3 +140,45 @@ python -m unittest discover -b -s tests -p test_aes_quality_relation_audit.py
 ```
 
 所有API响应使用模拟函数，测试不消费额度、不联网、不用GPU。
+
+## 仅补评引用未逐字匹配的失败项
+
+若少数请求有正常JSON和usage，但被 `Evidence not present in supplied essay` 拒绝，
+不要放松原校验、手改原标签、删除原缓存，或修改核心评审器后重跑全部请求。
+
+新增入口 retry_aes_quality_evidence_failures.py 只选择尚未确定、且确认为引文校验失败的方向。
+它完整重新评审这些文本对，质量标准不变，只额外强调引用应为3至8个词的连续原文片段。
+补评更严格地要求两篇文本都有非空且逐字匹配的引文，不进行空白归一化或模糊匹配。
+无论新标签是什么，第一个通过校验的判断都会保留；不按预期标签反复抽取结果。
+若修复基础方向后产生顺序冲突，可再新增一个必要的第三次判断。
+每个补评方向最多尝试两次；任何失败仍留档，不伪装成unchanged。
+
+先预览（不联网、不收费）：
+
+```powershell
+python .\paer\retry_aes_quality_evidence_failures.py --dry-run
+```
+
+确认初始失败方向数量与已检查的记录一致后，设置原会话的 DEEPSEEK_API_KEY，执行：
+
+```powershell
+python .\paer\retry_aes_quality_evidence_failures.py --allow-upload
+```
+
+这一步收费，只补失败方向及必要的冲突复核，不重评原本成功的方向。
+共享原审计目录中的30元预算账本，不重置此前消费。
+原 votes/、attempts/、原提示词/代码绑定及原汇总不变。
+新响应在原审计目录的 evidence_repair_run01/ 下留档。
+其中 derived_readonly_view/ 是用于汇总的派生视图，不是独立API运行目录，不能拿它清零预算。
+parent binding表示所属原审计，新增repair_binding单独记录补评指令、代码、请求哈希和原文件哈希。
+
+补评入口自动生成新汇总，不要再用旧汇总覆盖它：
+
+```powershell
+Get-Content -Encoding UTF8 .\artifacts\quality_assessment\seed42_deepseek_flash_run01\budget_status.json
+Get-Content -Encoding UTF8 .\outputs\quality_assessment\seed42_deepseek_flash_run01_evidence_repair01\quality_relation_summary.md
+```
+
+新汇总同目录的 evidence_repair_provenance.json 记录采用了哪些补评响应。
+若只想再次汇总，不调用API，可使用 --summarize-only。
+补评仍可能失败或出现三档各一票；如实保留未确定项，不保证全部补齐。
