@@ -2,7 +2,8 @@
 
 This stage prepares a feasibility check, not a new trained model or a completed quality audit.
 It copies existing accepted RHI training steps without generating or rewriting essay text.
-It does not call an API, load a GPU model, start attacks/training, or change old audit files.
+Preparation does not call an API, load a GPU model, start attacks/training, or change old audit files.
+The separate, explicit paid runner below appends charges to the SAME original budget ledger.
 
 ## On the experiment server
 
@@ -50,7 +51,58 @@ from the constructed judge request. No desired score increment is supplied.
 These are generic writing criteria, not an official rubric or human ground truth.
 The accepted-positive-gain pool is selected data, not quality-change prevalence.
 Token-window visibility has not been checked; exported pairs are NOT approved
-training supervision. No quality labels or API execution entry point are provided here.
+training supervision. Preparation itself creates no quality labels and enables no API calls.
+
+## Separate paid judge (after preparing the inputs)
+
+Do NOT repeat preparation if the directory has already been saved. Do not use
+the old `run_aes_quality_judge.py`: its holistic-quality protocol is different.
+Set `DEEPSEEK_API_KEY` locally if it is not already available; never paste it into chat
+or put it in a committed file. The new runner requires explicit `--allow-upload`.
+
+```powershell
+# No uploads, no writes, no key required: preview the first six already prepared pairs.
+python .\paer\run_aes_training_quality_judge.py --max-pairs 6 --dry-run
+
+# PAID: first six pairs = R2/H2/I-external1/I-self-dup1; same run/cache for later continuation.
+python .\paer\run_aes_training_quality_judge.py --max-pairs 6 --allow-upload
+
+Get-Content -Encoding UTF8 .\outputs\quality_assessment\training_edit_relations_seed42_judge01\training_edit_quality_summary.md
+```
+
+After inspecting those responses, continue the SAME run for all 60, if appropriate:
+
+```powershell
+python .\paer\run_aes_training_quality_judge.py --allow-upload
+```
+
+Successful votes are reused. A request has at most two charged attempts; interrupted
+unknown requests retain their reservations. Do not change directories to retry.
+Forward/reverse judgments are normalized; agreeing labels are stable. A disagreement
+between two judged labels permits one additional forward vote, recorded as a conflict.
+Uncertain/mixed judgments abstain rather than triggering retries for a preferred label.
+Non-verbatim/empty quotes, malformed responses and incomplete completions are errors,
+not unchanged. Exact quotes are checked automatically, but do not prove the judgment
+is correct or relevant; inspect reasons before any supervision decision.
+
+The NEW response cache and budget-status snapshot are under
+`artifacts/quality_assessment/training_edit_relations_seed42_judge01/`.
+Original responses/reports and prepared texts are not modified. The original cumulative
+ledger receives new reserve/settlement entries; its prior entries remain intact.
+Missing/replaced/truncated original ledger blocks execution rather than resetting spend.
+
+Each run automatically writes a partial/final report under
+`outputs/quality_assessment/training_edit_relations_seed42_judge01/`:
+`training_edit_quality_summary.md`, `training_edit_quality_results.json`, `pair_decisions.json`.
+Rows not yet judged remain unknown. Reports are counts of quality relations on selected
+TRAINING steps, not a new ASR result or a claim that PAER improved. Labels remain
+unapproved for training. Stable-only sensitivity counts and conflict flags are retained.
+
+To refresh only the offline report from saved responses:
+
+```powershell
+python .\paer\summarize_aes_training_quality_judgments.py
+```
 
 ## Budget
 
