@@ -55,7 +55,11 @@ class AESScorer(nn.Module):
                     encoding="utf-8"
                 )
             )
-            if paer_config.get("model_type") == "paer_aes_v3":
+            if paer_config.get("model_type") == "aes_low_rank_experts_v1":
+                from paer.expert_routing.model import AESLowRankExpertScorer
+
+                paer_class = AESLowRankExpertScorer
+            elif paer_config.get("model_type") == "paer_aes_v3":
                 from paer.modeling_paer_v3 import PAERV3ForEssayScoring
 
                 paer_class = PAERV3ForEssayScoring

@@ -573,7 +573,7 @@ def build_paer_head_optimizer_groups(
 
 
 class RHTrainer:
-    def __init__(self, config: RHTrainingConfig):
+    def __init__(self, config: RHTrainingConfig, *, model_factory=None):
         self.config = config
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self._set_seed(config.seed)
@@ -591,7 +591,9 @@ class RHTrainer:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
 
         print(f"Loading {config.experiment_name or config.training_mode} from {config.checkpoint_path}...", flush=True)
-        if config.training_mode == PAER_RH_V3:
+        if model_factory is not None:
+            self.model = model_factory(config).to(self.device)
+        elif config.training_mode == PAER_RH_V3:
             self.model = PAERV3ForEssayScoring.from_base_checkpoint(
                 config.checkpoint_path,
                 dtype=torch.float32,
@@ -629,23 +631,13 @@ class RHTrainer:
             max_records=config.max_trace_records,
             allowed_attacks=config.training_attacks,
         )
-        self.train_dataset = PairedEssayTrainingDataset(
-            config.train_csv,
-            self.trace_dataset,
-            label_offset=config.label_offset,
-            max_samples=config.max_train_samples,
-        )
+        self.train_dataset = self.build_training_dataset()
         self.valid_dataset = CleanValidationDataset(
             config.valid_csv,
             config.label_offset,
             max_samples=config.max_valid_samples,
         )
-        self.trace_collator = RHTraceCollator(
-            self.tokenizer,
-            config.max_length,
-            config.label_offset,
-            config.attribution_gain_scale,
-        )
+        self.trace_collator = self.build_trace_collator()
         self.clean_collator = CleanCollator(self.tokenizer, config.max_length)
         attack_counts: dict[str, int] = {}
         for item in self.trace_dataset.items:
@@ -664,15 +656,7 @@ class RHTrainer:
             flush=True,
         )
 
-        optimizer_groups = (
-            build_paer_head_optimizer_groups(
-                self.model,
-                weight_decay=config.weight_decay,
-                head_learning_rate=config.paer_head_learning_rate,
-            )
-            if config.training_mode in (PAER_RH_V2, PAER_RH_V3)
-            else build_adamw_parameter_groups(self.model, config.weight_decay)
-        )
+        optimizer_groups = self.optimizer_groups()
         self.optimizer = torch.optim.AdamW(
             optimizer_groups,
             lr=config.learning_rate,
@@ -724,6 +708,35 @@ class RHTrainer:
             encoding="utf-8",
         )
 
+    def build_training_dataset(self):
+        return PairedEssayTrainingDataset(self.config.train_csv, self.trace_dataset,
+            label_offset=self.config.label_offset, max_samples=self.config.max_train_samples)
+
+    def build_trace_collator(self):
+        return RHTraceCollator(self.tokenizer, self.config.max_length,
+            self.config.label_offset, self.config.attribution_gain_scale)
+
+    def optimizer_groups(self):
+        config = self.config
+        return (
+            build_paer_head_optimizer_groups(
+                self.model,
+                weight_decay=config.weight_decay,
+                head_learning_rate=config.paer_head_learning_rate,
+            )
+            if config.training_mode in (PAER_RH_V2, PAER_RH_V3)
+            else build_adamw_parameter_groups(self.model, config.weight_decay)
+        )
+
+    def begin_extension_step(self):
+        """Opt-in extensions can reset diagnostics; historical runs do nothing."""
+
+    def additional_adversarial_objective(self, output, batch):
+        return None
+
+    def extension_metrics(self):
+        return {}
+
     def _autocast_context(self):
         if self.autocast_dtype is None:
             return nullcontext()
@@ -763,6 +776,7 @@ class RHTrainer:
 
     def train_step(self, batch: dict[str, Any]) -> dict[str, float]:
         cfg = self.config
+        self.begin_extension_step()
         batch = self._to_device(batch)
         labels = batch["labels"].float()
         adversarial_indices = batch["adversarial_indices"].long()
@@ -917,13 +931,16 @@ class RHTrainer:
                         + cfg.attention_alignment_loss_weight
                         * attention_alignment_loss
                     )
+            additional = self.additional_adversarial_objective(adversarial_output, batch)
+            if additional is not None:
+                adversarial_objective = adversarial_objective + additional
             adversarial_objective_value = float(adversarial_objective.item())
             (adversarial_objective / cfg.gradient_accumulation_steps).backward()
 
         localization_loss_value = 0.5 * (
             clean_localization_value + float(adversarial_localization.item())
         )
-        return {
+        metrics = {
             "total_loss": clean_objective_value + adversarial_objective_value,
             "clean_loss": clean_loss_value,
             "adversarial_loss": float(adversarial_loss.item()),
@@ -937,6 +954,8 @@ class RHTrainer:
             "mean_correction_lift": float(mean_correction_lift.item()),
             "n_adversarial": n_adversarial,
         }
+        metrics.update(self.extension_metrics())
+        return metrics
 
     def _optimizer_step(self, accumulated_micro_batches: int) -> None:
         cfg = self.config
