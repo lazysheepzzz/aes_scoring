@@ -331,3 +331,30 @@ Only after the architecture and RH-selected checkpoint are frozen should this
 RH variant be evaluated on unseen Injection and MLM-guided. Injection measures
 transfer to the third peer attack--defense family; MLM measures attack-only
 unseen transfer. Do not use either result to revise or reselect PAER-RH-v3.
+
+### Forward-only score-path diagnostic for the completed RHI model
+
+`analyze_aes_paer_score_paths.py` decomposes score changes on saved attack texts:
+global score + positive token evidence - negative token evidence - correction.
+This is algebraic accounting, not causal attribution or human quality judgment.
+It does not change models, generate attacks/texts, call APIs, or start training.
+The source must be a completed frozen RHI evaluation with original PAER-v3
+weights. Injection subtypes together receive one family weight; MLM is unused.
+
+After syncing A -> GitHub B -> remote C, run on C (`E:\xjj\aes_scoring`):
+
+```powershell
+python -m unittest discover -b -s tests -p test_aes_paer_score_paths.py
+python .\paer\analyze_aes_paer_score_paths.py --dry-run
+python .\paer\analyze_aes_paer_score_paths.py
+Get-Content -Encoding UTF8 .\outputs\aes_paer_rhi_v3_score_path_diagnostic_seed42_run01\score_path_summary.md
+```
+
+Default source: `outputs/aes_rhi_uniform30_full_evaluation_seed42`; override
+`--evaluation-dir` explicitly for a different frozen evaluation. Default
+forward batch is 2, float32, max length inherited from the original evaluation.
+Outputs are input/code-bound and refuse foreign nonempty directories. Identical
+interrupted runs reuse hash-checked replay shards. `--cpu-summary-only` needs
+the complete cache and loads no model. Old code drift is disclosed; replay must
+match saved scores within 1e-4 before interpreting the report. Exact ASR uses
+the original threshold unchanged, and numerical threshold flips are reported.
