@@ -24,7 +24,9 @@ ABLATIONS = {
         "route_lift_loss_weight": 0.0,
         "clean_correction_weight": 0.0,
     },
+    "shuffled_localization": {"shuffled_localization_seed": 42001},
 }
+HISTORICAL_ABLATIONS = ("without_token_localization", "without_routing")
 
 
 def ablated_config(reference, variant, output_dir, smoke=False):
@@ -32,6 +34,11 @@ def ablated_config(reference, variant, output_dir, smoke=False):
         raise ValueError("Reference must be the full PAER-RHI-v3 training configuration")
     if variant not in ABLATIONS:
         raise ValueError("Unknown ablation")
+    if reference.get("shuffled_localization_seed") is not None:
+        raise ValueError("Reference already has shuffled localization")
+    if variant == "shuffled_localization" and any(reference.get(key) is not None for key in
+                                                 ("max_train_samples", "max_valid_samples", "max_trace_records")):
+        raise ValueError("Shuffled control requires a full-data reference")
     for key in ("correction_scale", "localization_loss_weight", "attention_alignment_loss_weight"):
         if reference.get(key, 0) <= 0:
             raise ValueError(f"Reference is not a full model: {key}")
@@ -60,8 +67,14 @@ def main(argv=None):
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--smoke", action="store_true", help="160 training / 32 validation rows, 1 epoch; not a paper result")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--check-shuffle", action="store_true",
+                        help="With --dry-run: tokenize real trace samples on CPU, no model forward")
     parser.add_argument("--online", action="store_true")
     args = parser.parse_args(argv)
+    if args.check_shuffle and (not args.dry_run or args.ablation != "shuffled_localization"):
+        parser.error("--check-shuffle requires --dry-run and --ablation shuffled_localization")
+    if args.ablation == "shuffled_localization" and args.online:
+        parser.error("Shuffled localization requires local inputs; omit --online")
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         raise FileExistsError(f"Will not overwrite existing output: {args.output_dir}")
     reference = read_json(args.reference_output_dir / "launcher_config.json")
@@ -76,6 +89,13 @@ def main(argv=None):
                 "retrained_from_b0": True, "mlm_used_for_selection": False,
                 "code_hashes": {p.name: sha256(p) for p in (
                     Path(__file__), ROOT / "paer/aes_rh_trainer.py", ROOT / "paer/modeling_paer_v3.py")}}
+    if args.ablation == "shuffled_localization":
+        protocol["code_hashes"]["localization_shuffle.py"] = sha256(ROOT / "paer/localization_shuffle.py")
+        protocol["code_hashes"]["shuffled_localization_preflight.py"] = sha256(
+            ROOT / "paer/shuffled_localization_preflight.py")
+        if args.check_shuffle or not args.dry_run:
+            from paer.shuffled_localization_preflight import check_shuffle
+            protocol["shuffle_preflight"] = check_shuffle(config)
     print(json.dumps(protocol, indent=2), flush=True)
     if args.dry_run:
         return 0

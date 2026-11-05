@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
-from paer.evaluate_aes_paer_rhi_ablations import selection_arguments
+from unittest.mock import patch
+from paer.evaluate_aes_paer_rhi_ablations import selection_arguments, verify_reference_evaluation
 
 
 class SelectionArgumentsTests(unittest.TestCase):
@@ -41,6 +42,24 @@ class SelectionArgumentsTests(unittest.TestCase):
         self.assertEqual(parsed.defense_output_dir, Path("train"))
         self.assertEqual(parsed.attack, "hotflip")
         self.assertEqual(parsed.selection_steps, reference["selection_steps"])
+
+    def test_shuffled_reuses_only_matching_uniform30_frozen_weights(self):
+        weights = {"model.safetensors": "fixture"}
+        chosen = {"checkpoint_path": "full/gstep400", "checkpoint_name": "gstep400"}
+        selection = {"protocol": "rhi_selection_v1", "valid_sha256": "data", "bank_sha256": "bank",
+                     "mlm_used_for_selection": False,
+                     "candidate_weights": {"gstep400": weights},
+                     "arguments": dict(seed=42, selection_steps=30, rudimentary_selection_steps=30,
+                                       injection_selection_steps=30)}
+        evaluation = {"protocol": "frozen_checkpoint_evaluation_v1", "suite": "rhi",
+                      "evaluation_role": "development", "smoke": False, "steps": 30, "seed": 42,
+                      "data_sha256": "data", "bank_sha256": "bank",
+                      "checkpoints": {"paer": {"path": "full/gstep400", "files": weights}}}
+        with patch("paer.evaluate_aes_paer_rhi_ablations.checkpoint_identity", return_value=weights):
+            verify_reference_evaluation(selection, chosen, evaluation, "new-selection", shuffled=True)
+            selection["arguments"]["selection_steps"] = 10
+            with self.assertRaisesRegex(ValueError, "uniform30"):
+                verify_reference_evaluation(selection, chosen, evaluation, "new-selection", shuffled=True)
 
 
 if __name__ == "__main__":

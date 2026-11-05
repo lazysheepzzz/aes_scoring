@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from paer.modeling_paer import PAERForEssayScoring
 from paer.modeling_paer_v3 import PAERV3ForEssayScoring
+from paer.localization_shuffle import shuffled_targets
 from paer.rhi_experiment_utils import training_families
 from text_scoring_adv_training.evaluation.aes.scorer import AESScorer
 from text_scoring_adv_training.training.aes_trainer import (
@@ -106,9 +107,16 @@ class RHTrainingConfig:
     # Opt-in exposure extensions; historical RH/RHI defaults retain their behavior.
     experiment_name: str | None = None
     training_attacks: tuple[str, ...] = ("rudimentary", "hotflip")
+    shuffled_localization_seed: int | None = None
 
     def __post_init__(self) -> None:
         training_families(self.training_attacks)
+        if self.shuffled_localization_seed is not None and (
+            self.training_mode != PAER_RH_V3
+            or type(self.shuffled_localization_seed) is not int
+            or self.shuffled_localization_seed < 0
+        ):
+            raise ValueError("Shuffled localization requires PAER-v3 and a nonnegative integer seed")
         if self.training_mode not in TRAINING_MODES:
             raise ValueError(f"Unknown training_mode: {self.training_mode}")
         if self.precision not in ("bfloat16", "float32"):
@@ -350,12 +358,14 @@ def changed_token_uplift_targets(
 
 
 class RHTraceCollator:
-    def __init__(self, tokenizer, max_length: int, label_offset: float, gain_scale: float):
+    def __init__(self, tokenizer, max_length: int, label_offset: float, gain_scale: float,
+                 *, shuffled_localization_seed: int | None = None):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.label_offset = label_offset
         self.gain_scale = gain_scale
         self.special_ids = set(tokenizer.all_special_ids)
+        self.shuffled_localization_seed = shuffled_localization_seed
 
     def _encode(self, texts: list[str]) -> dict[str, torch.Tensor]:
         return self.tokenizer(
@@ -428,6 +438,16 @@ class RHTraceCollator:
                 ),
                 gain_scale=self.gain_scale,
             )
+            if self.shuffled_localization_seed is not None and any(cumulative_targets):
+                cumulative_targets = shuffled_targets(
+                    cumulative_targets,
+                    [bool(attended) and token_id not in self.special_ids
+                     for token_id, attended in zip(
+                         after_ids, adversarial["attention_mask"][row_index, :after_length].tolist())],
+                    seed=self.shuffled_localization_seed,
+                    row_index=int(item["row_index"]),
+                    adversarial_text=str(item["adversarial_text"]),
+                )
             cumulative_token_targets[row_index, :after_length] = torch.tensor(
                 cumulative_targets
             )
@@ -714,7 +734,8 @@ class RHTrainer:
 
     def build_trace_collator(self):
         return RHTraceCollator(self.tokenizer, self.config.max_length,
-            self.config.label_offset, self.config.attribution_gain_scale)
+            self.config.label_offset, self.config.attribution_gain_scale,
+            shuffled_localization_seed=self.config.shuffled_localization_seed)
 
     def optimizer_groups(self):
         config = self.config
