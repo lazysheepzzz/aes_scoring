@@ -17,6 +17,12 @@ tmp
 论文写作交接文档_2026-09-16.md
 aes_main_results_summary_2026-10-07.md
 CLAUDE.md
-paper_results
+paper_results/*
+!paper_results/bootstrap_paer_v3_vs_mixed_at.py
+!paper_results/figures/
+paper_results/figures/*
+!paper_results/figures/build_aes_paper_figures.py
+!paper_results/figures/seed42_reported_results.json
+!paper_results/figures/README.md
 .ppt_speech_inspect
 paper

@@ -1,0 +1,86 @@
+{
+  "schema": "aes_paper_figures_reported_aggregates_v1",
+  "source_status": "USER_REPORTED_AGGREGATES_NOT_RAW_ARTIFACT_VERIFIED",
+  "source_description": "Transcribed from results supplied by the user in this research conversation. These are observed reported results, not generated measurements. Remote original artifacts have not been audited locally. Retain this provenance when distributing figures.",
+  "evaluation_role": "development",
+  "training_seed": 42,
+  "attack_seed": 42,
+  "n_essays": 1154,
+  "success_threshold": 0.1,
+  "max_search_rounds": 30,
+  "attack_settings": {
+    "beam_size": 1,
+    "max_candidates_per_step": 16,
+    "max_token_edit_rate": 0.1,
+    "hotflip_n_sample_pos": 8,
+    "hotflip_top_k_per_pos": 2,
+    "sentence_bank_sha256": "92ad2de1200d0a815548b586851072ae0bb28ab31123b663c56e80f9146af7b2"
+  },
+  "selection_protocol": "Mixed-AT and PAER use uniform-30 checkpoint selection. Specialist models retain their historical selections and are reference baselines, not new RHI-paired runs.",
+  "held_out_scope": "MLM-guided was excluded from the original RHI training pool and checkpoint selection; these development results have subsequently been inspected and are not an untouched future test.",
+  "models": [
+    {
+      "id": "b0", "label": "AES baseline (B0)", "short_label": "B0",
+      "checkpoint_suffix": "deberta_checkpoints/fold0_best",
+      "clean_qwk": 0.8377,
+      "asr": {"rudimentary": 0.9419, "hotflip": 0.9610, "injection_family": 0.4267, "mlm_guided": 0.8640},
+      "rhi_macro_asr": 0.7765
+    },
+    {
+      "id": "c0", "label": "Clean continuation (C0)", "short_label": "C0",
+      "checkpoint_suffix": "outputs/aes_clean_continuation_seed42/best",
+      "clean_qwk": 0.8350,
+      "asr": {"rudimentary": 0.9965, "hotflip": 0.9861, "injection_family": 0.5104, "mlm_guided": 0.9203},
+      "rhi_macro_asr": 0.8310
+    },
+    {
+      "id": "at_r", "label": "AT-R (Rudimentary-v2)", "short_label": "AT-R",
+      "clean_qwk": 0.8196,
+      "asr": {"rudimentary": 0.8821, "hotflip": 0.7773, "injection_family": 0.3930, "mlm_guided": 0.8899},
+      "rhi_macro_asr": 0.6841
+    },
+    {
+      "id": "at_h", "label": "AT-H (HotFlip)", "short_label": "AT-H",
+      "clean_qwk": 0.8216,
+      "asr": {"rudimentary": 0.9896, "hotflip": 0.7808, "injection_family": 0.4710, "mlm_guided": 0.8718},
+      "rhi_macro_asr": 0.7471
+    },
+    {
+      "id": "at_i", "label": "AT-I (Injection)", "short_label": "AT-I",
+      "clean_qwk": 0.8288,
+      "asr": {"rudimentary": 0.9974, "hotflip": 0.9818, "injection_family": 0.2990, "mlm_guided": 0.9151},
+      "rhi_macro_asr": 0.7594
+    },
+    {
+      "id": "mixed", "label": "Mixed-AT-RHI", "short_label": "Mixed-AT",
+      "checkpoint_suffix": "outputs/aes_mixed_at_rhi_seed42/gstep1000",
+      "clean_qwk": 0.8300,
+      "asr": {"rudimentary": 0.9948, "hotflip": 0.6854, "injection_family": 0.1409, "mlm_guided": 0.8293},
+      "rhi_macro_asr": 0.6070,
+      "note": "Uniform-30 selection chose gstep1000. Do not substitute historical gstep400 values (QWK 0.8427; RHI ASR 0.6140)."
+    },
+    {
+      "id": "paer", "label": "PAER-RHI-v3", "short_label": "PAER",
+      "checkpoint_suffix": "outputs/aes_paer_rhi_v3_seed42/gstep400",
+      "clean_qwk": 0.8366,
+      "asr": {"rudimentary": 0.9081, "hotflip": 0.4913, "injection_family": 0.0697, "mlm_guided": 0.7738},
+      "rhi_macro_asr": 0.4897
+    }
+  ],
+  "routing_diagnostic": {
+    "checkpoint_suffix": "outputs/aes_paer_rhi_v3_seed42/gstep400",
+    "not_a_retrained_ablation": true,
+    "fixed_set": {
+      "description": "Same saved attacks against routed PAER, replayed with and without routing. Descriptive architectural switch, not causal identification.",
+      "route_off": {"rudimentary": 0.7972270363951474, "hotflip": 0.550259965337955, "injection_external": 0.09098786828422877, "injection_self_dup": 0.05632582322357019},
+      "routed": {"rudimentary": 0.9081455805892548, "hotflip": 0.4913344887348354, "injection_external": 0.08752166377816291, "injection_self_dup": 0.05199306759098787}
+    },
+    "adaptive": {
+      "description": "Each inference mode attacked separately with the same search settings; input texts differ between modes.",
+      "route_off_clean_qwk": 0.8351,
+      "routed_clean_qwk": 0.8366,
+      "route_off": {"rudimentary": 0.9523, "hotflip": 0.5945, "injection_family": 0.0862},
+      "routed": {"rudimentary": 0.9081, "hotflip": 0.4913, "injection_family": 0.0697}
+    }
+  }
+}
