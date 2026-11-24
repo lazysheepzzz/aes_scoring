@@ -97,10 +97,22 @@ class PAERV3ForEssayScoring(nn.Module):
         token_type_ids: torch.Tensor | None,
         position_ids: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if getattr(self.config, "model_type", None) == "longformer":
+            # Match LongformerForSequenceClassification: CLS has global attention
+            # and its classification head takes the sequence, not a pooled vector.
+            global_mask = torch.zeros_like(attention_mask)
+            global_mask[:, 0] = 1
+            states = self.base_model.longformer(
+                input_ids=input_ids, attention_mask=attention_mask,
+                global_attention_mask=global_mask, inputs_embeds=inputs_embeds,
+                position_ids=position_ids, token_type_ids=token_type_ids,
+                output_hidden_states=False, return_dict=True,
+            ).last_hidden_state
+            return states, self.base_model.classifier(states)
         encoder = getattr(self.base_model, "deberta", None)
         if encoder is None:
             raise TypeError(
-                "PAER-v3 currently requires a DeBERTa sequence-classification model"
+                "PAER-v3 requires a DeBERTa or Longformer sequence-classification model"
             )
         outputs = encoder(
             input_ids=input_ids,

@@ -16,6 +16,16 @@ from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTok
 __all__ = ["AESScorer"]
 
 
+def _longformer_cls_global_mask(module, args, kwargs):
+    # HF's default creates the mask from input_ids, which may be None when
+    # scoring precomputed embeddings. Preserve native CLS-only global attention.
+    if kwargs.get("inputs_embeds") is not None and kwargs.get("global_attention_mask") is None:
+        embeds = kwargs["inputs_embeds"]
+        mask = embeds.new_zeros(embeds.shape[:2], dtype=torch.long)
+        mask[:, 0] = 1
+        return args, dict(kwargs, global_attention_mask=mask)
+
+
 class AESScorer(nn.Module):
     """
     DeBERTa-v3-base regression scorer for AES.
@@ -82,6 +92,8 @@ class AESScorer(nn.Module):
                 torch_dtype=dtype,
                 trust_remote_code=True,
             ).to(device)
+            if config.model_type == "longformer":
+                self.model.register_forward_pre_hook(_longformer_cls_global_mask, with_kwargs=True)
         self.model.eval()
 
         self.device = device
