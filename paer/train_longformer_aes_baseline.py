@@ -4,12 +4,13 @@ from __future__ import annotations
 import argparse
 import csv
 import inspect
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from paer.rhi_experiment_utils import save_json, sha256
+from paer.rhi_experiment_utils import read_json, save_json, sha256
 
 
 def read_fold(path):
@@ -22,6 +23,39 @@ def read_fold(path):
     return rows
 
 
+def checked_resume(out, checkpoint, expected):
+    """Validate our single-GPU Trainer run without writing or unpickling state."""
+    parent = (out/"intermediate").resolve()
+    cp = checkpoint.resolve()
+    pattern = r"checkpoint-([1-9][0-9]*)"
+    match = re.fullmatch(pattern, cp.name)
+    if not match or cp.parent != parent or not cp.is_dir():
+        raise ValueError(f"Expected an existing checkpoint under {parent}: {cp}")
+    if (out/"best").exists() or (out/"best_clean_metrics.json").exists():
+        raise FileExistsError(f"Final export already exists; refusing to resume: {out}")
+    saved = read_json(out/"run_config.json")
+    if saved != expected:
+        keys = sorted(k for k in saved.keys() | expected.keys() if saved.get(k) != expected.get(k))
+        raise ValueError(f"Run configuration or fold changed: {keys}")
+    step = int(match[1])
+    if any(int(m[1]) > step for p in parent.iterdir() if p.is_dir()
+           and (m := re.fullmatch(pattern, p.name))):
+        raise ValueError("A newer checkpoint exists; refusing to rewind the original run")
+    for name in ("model.safetensors", "trainer_state.json", "optimizer.pt", "scheduler.pt", "rng_state.pth"):
+        f = cp/name
+        if not f.is_file() or not f.stat().st_size:
+            raise ValueError(f"Missing or empty resume file: {f}")
+    state = read_json(cp/"trainer_state.json")
+    if state["global_step"] != step:
+        raise ValueError("Checkpoint name and Trainer global_step disagree")
+    if state.get("best_model_checkpoint"):
+        best = Path(state["best_model_checkpoint"]).resolve()
+        if best.parent != parent or not (best/"model.safetensors").is_file():
+            raise ValueError(f"Earlier best weights needed for end-of-training selection are missing: {best}")
+    print(f"[RESUME CHECK] step={step}/{state['max_steps']} | checkpoint={cp}", flush=True)
+    return cp
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="allenai/longformer-base-4096",
@@ -29,6 +63,8 @@ def main():
     p.add_argument("--online", action="store_true", help="Allow loading pretrained files from the Hub")
     p.add_argument("--smoke", action="store_true", help="Two updates, separate directory; not a B0 for experiments")
     p.add_argument("--dry-run", action="store_true", help="Validate local folds only; no model download")
+    p.add_argument("--resume-from-checkpoint", type=Path, metavar="PATH",
+                   help="Resume the existing run from its latest numbered full Trainer checkpoint")
     args = p.parse_args()
     train, valid = [ROOT / f"data/{name}_fold0.csv" for name in ("train", "valid")]
     tr, va = read_fold(train), read_fold(valid)
@@ -38,15 +74,37 @@ def main():
         raise ValueError("Train/development overlap")
     out = ROOT / "outputs" / (("smoke_" if args.smoke else "") + "longformer_asap2_b0_seed42")
     print(f"[PLAN] {len(tr)} train / {len(va)} dev; max_length=1024; seed=42; output={out}", flush=True)
-    if args.dry_run:
+    if args.dry_run and args.resume_from_checkpoint is None:
         return
-    if out.exists():
+    if out.exists() and args.resume_from_checkpoint is None:
         raise FileExistsError(f"Refusing to replace an existing run: {out}")
+    from transformers import TrainingArguments
+    strategy = ("eval_strategy" if "eval_strategy" in inspect.signature(TrainingArguments).parameters
+                else "evaluation_strategy")
+    period = 1 if args.smoke else 72
+    opts = dict(output_dir=str(out/"intermediate"), learning_rate=2e-5, weight_decay=.01,
+                lr_scheduler_type="linear", num_train_epochs=3, per_device_train_batch_size=2,
+                gradient_accumulation_steps=1 if args.smoke else 8, per_device_eval_batch_size=2,
+                bf16=True, remove_unused_columns=False, dataloader_num_workers=0,
+                save_strategy="steps", eval_steps=period, save_steps=period, logging_steps=period,
+                save_total_limit=2, load_best_model_at_end=True, metric_for_best_model="qwk",
+                greater_is_better=True, seed=42, report_to=[], **{strategy:"steps"})
+    if args.smoke:
+        opts["max_steps"] = 2
+        tr, va = tr[:16], va[:32]
+    config = dict(model=args.model, train_sha256=sha256(train),
+                  valid_sha256=sha256(valid), train_n=len(tr), dev_n=len(va), max_length=1024,
+                  score_offset=1, smoke=args.smoke, training=opts)
+    resume = None
+    if args.resume_from_checkpoint is not None:
+        resume = checked_resume(out, args.resume_from_checkpoint, config)
+        if args.dry_run:
+            return
     import numpy as np
     import torch
     from sklearn.metrics import cohen_kappa_score
     from transformers import (AutoConfig, AutoModelForSequenceClassification, AutoTokenizer,
-                              Trainer, TrainingArguments, set_seed)
+                              Trainer, set_seed)
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("Run on remote C with CUDA and bf16")
     set_seed(42)
@@ -71,27 +129,12 @@ def main():
         y, f = pred.label_ids.reshape(-1), raw.reshape(-1)
         return dict(qwk=float(cohen_kappa_score(y, np.rint(f).clip(0, 5), weights="quadratic")),
                     mae=float(np.abs(y-f).mean()), rmse=float(np.sqrt(((y-f)**2).mean())))
-    strategy = ("eval_strategy" if "eval_strategy" in inspect.signature(TrainingArguments).parameters
-                else "evaluation_strategy")
-    period = 1 if args.smoke else 72
-    # Effective clean batch=16; small physical batch for the remote 24 GiB GPU.
-    opts = dict(output_dir=str(out/"intermediate"), learning_rate=2e-5, weight_decay=.01,
-                lr_scheduler_type="linear", num_train_epochs=3, per_device_train_batch_size=2,
-                gradient_accumulation_steps=1 if args.smoke else 8, per_device_eval_batch_size=2,
-                bf16=True, remove_unused_columns=False, dataloader_num_workers=0,
-                save_strategy="steps", eval_steps=period, save_steps=period, logging_steps=period,
-                save_total_limit=2, load_best_model_at_end=True, metric_for_best_model="qwk",
-                greater_is_better=True, seed=42, report_to=[], **{strategy:"steps"})
-    if args.smoke:
-        opts["max_steps"] = 2
-        tr, va = tr[:16], va[:32]
-    out.mkdir(parents=True, exist_ok=False)
-    save_json(out/"run_config.json", dict(model=args.model, train_sha256=sha256(train),
-              valid_sha256=sha256(valid), train_n=len(tr), dev_n=len(va), max_length=1024,
-              score_offset=1, smoke=args.smoke, training=opts))
+    if resume is None:
+        out.mkdir(parents=True, exist_ok=False)
+        save_json(out/"run_config.json", config)
     trainer = Trainer(model=net, args=TrainingArguments(**opts), train_dataset=tr,
                       eval_dataset=va, data_collator=collate, compute_metrics=metrics)
-    trainer.train()
+    trainer.train(resume_from_checkpoint=str(resume) if resume else None)
     measures = trainer.evaluate()
     trainer.save_model(str(out/"best"))
     tok.save_pretrained(out/"best")

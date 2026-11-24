@@ -14,6 +14,19 @@
 
    C0 仅用于本骨干的 clean QWK 门槛，保持与原实验相同的选模定义。RHI 使用本次 Longformer-B0 的轨迹；不能用 DeBERTa 轨迹增分替代。Mixed/PAER 共享轨迹池、统一 30 步选模；模型冻结后才评 MLM。完整表读 `outputs/longformer_asap2_paired_evaluation_seed42/experiment_results.md`，B0 参考在 `outputs/longformer_asap2_b0_evaluation_seed42`。MLM 使用远程已有评估模型缓存。不同骨干 tokenizer、轨迹池样本和参数量可能不同；主要看每个骨干内部 PAER 对 Mixed 的差值。
 
+## 正式 B0 中断后续训
+
+保留原训练目录（包括当前最佳权重和最近保存的断点）。例如在仓库根目录：
+
+```powershell
+$cp = '.\outputs\longformer_asap2_b0_seed42\intermediate\checkpoint-576'
+python .\paer\train_longformer_aes_baseline.py --resume-from-checkpoint $cp --dry-run
+if ($LASTEXITCODE -ne 0) { throw "断点预检未通过，停止。" }
+python .\paer\train_longformer_aes_baseline.py --resume-from-checkpoint $cp
+```
+
+换成实际最新断点。预检仅读取文件，不反序列化优化器，也不启动 GPU；实际续训由 Trainer 恢复状态，继续原有保存与最佳模型选择策略。
+
 ## 原版 ASAP-AES：独立的数据准备阶段
 
 需要原版有标签 TSV（字段 essay_id、essay_set、essay、domain1_score），不是已有 ASAP 2.0 的 train.csv。
