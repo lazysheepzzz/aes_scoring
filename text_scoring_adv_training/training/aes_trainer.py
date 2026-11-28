@@ -1100,7 +1100,7 @@ class AESAdversarialTrainer:
         self.scheduler.step()
         self.optimizer.zero_grad(set_to_none=True)
 
-    def train(self):
+    def train(self, checkpoints=None):
         cfg = self.config
         global_step = 0
         best_qwk = -1.0
@@ -1115,12 +1115,27 @@ class AESAdversarialTrainer:
         )
         self.optimizer.zero_grad(set_to_none=True)
 
-        for epoch in range(cfg.num_epochs):
+        saved = checkpoints.restore(self) if checkpoints is not None else None
+        first_epoch = saved["epoch"] if saved else 0
+        best_step = None
+        if saved:
+            global_step, best_qwk, best_step = saved["step"], saved["best_qwk"], saved["best_step"]
+            data_generator.set_state(saved["epoch_generator"])
+        for epoch in range(first_epoch, cfg.num_epochs):
             self.scorer.model.train()
             epoch_loss, epoch_steps = 0.0, 0
+            epoch_generator = data_generator.get_state() if checkpoints is not None else None
+            iterator = iter(train_loader)
+            if saved and epoch == first_epoch:
+                # Same epoch permutation; skip CPU collation only, no forward or optimizer step.
+                epoch_loss, epoch_steps = saved["epoch_loss"], saved["epoch_steps"]
+                for _ in range(epoch_steps):
+                    next(iterator)
+                checkpoints.restore_rng(saved)
+                saved = None
 
             train_progress = tqdm(
-                train_loader,
+                iterator, initial=epoch_steps, total=len(train_loader),
                 desc=f"Epoch {epoch + 1}/{cfg.num_epochs}",
                 unit="batch",
                 dynamic_ncols=True,
@@ -1156,12 +1171,19 @@ class AESAdversarialTrainer:
                           f"MAE={eval_metrics['mae']:.4f}", flush=True)
                     if eval_metrics["qwk"] > best_qwk:
                         best_qwk = eval_metrics["qwk"]
-                        self.save("best")
+                        best_step = global_step
+                        if checkpoints is None:
+                            self.save("best")
                         print(f"  → New best QWK: {best_qwk:.4f}", flush=True)
                     self.scorer.model.train()
 
                 if did_optimizer_step and global_step % cfg.save_every == 0:
-                    self.save(f"gstep{global_step}")
+                    if checkpoints is None:
+                        self.save(f"gstep{global_step}")
+                    else:
+                        checkpoints.save(self, epoch=epoch, epoch_loss=epoch_loss, epoch_steps=epoch_steps,
+                                         epoch_generator=epoch_generator, step=global_step,
+                                         best_qwk=best_qwk, best_step=best_step)
 
             avg_loss = epoch_loss / max(1, epoch_steps)
             print(f"Epoch {epoch+1}/{cfg.num_epochs} done. Avg loss: {avg_loss:.4f}", flush=True)
@@ -1172,6 +1194,9 @@ class AESAdversarialTrainer:
 
         final_metrics = self.evaluate()
         print(f"Final — QWK={final_metrics['qwk']:.4f}", flush=True)
+        if checkpoints is not None:
+            checkpoints.finish(self, global_step, best_step, best_qwk, final_metrics)
+            return max(best_qwk, final_metrics["qwk"])
         if final_metrics["qwk"] > best_qwk:
             best_qwk = final_metrics["qwk"]
             self.save("best")

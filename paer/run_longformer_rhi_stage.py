@@ -12,7 +12,7 @@ BASE = OUT / "longformer_asap2_b0_seed42/best"
 ART = ROOT / "artifacts/paer/longformer_asap2_seed42"
 RH = ART / "rh_training_traces.jsonl"
 POOL = ART / "rhi_training_pool"
-C0 = OUT / "longformer_asap2_c0_seed42"
+C0 = OUT / "longformer_asap2_c0_resumable_seed42"
 MODELS = {k: OUT / f"longformer_asap2_{k}_seed42" for k in ("mixed", "paer")}
 SEL = {k: OUT / f"longformer_asap2_{k}_selection_uniform30_seed42" for k in MODELS}
 SMALL = ["--per-device-train-batch-size", "2", "--gradient-accumulation-steps", "16",
@@ -20,9 +20,8 @@ SMALL = ["--per-device-train-batch-size", "2", "--gradient-accumulation-steps", 
 
 
 def commands(stage):
-    if stage == "c0":
-        return [["whitebox/run_aes_clean_continuation_training.py", "--current-python", "--checkpoint-path", BASE,
-                 "--output-dir", C0, *SMALL]]
+    if stage in ("c0", "resume-c0"):
+        return [["paer/train_resumable_longformer_c0.py", *(["--resume"] if stage == "resume-c0" else [])]]
     if stage == "rh-pool":
         return [["paer/prepare_aes_rh_training_traces.py", "--checkpoint", BASE, "--output", RH,
                  "--score-batch-size", "2"]]
@@ -52,7 +51,7 @@ def commands(stage):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("stage", choices=("c0","rh-pool","rhi-pool","mixed","paer","select-mixed",
+    p.add_argument("stage", choices=("c0","resume-c0","rh-pool","rhi-pool","mixed","paer","select-mixed",
                                      "select-paer","evaluate-b0","evaluate-pair"))
     p.add_argument("--run", action="store_true")
     args = p.parse_args()
@@ -61,7 +60,9 @@ def main():
         print(subprocess.list2cmdline(cmd), flush=True)
         if args.run:
             if args.stage == "c0" and C0.exists():
-                raise FileExistsError(f"Refusing to overwrite: {C0}")
+                raise FileExistsError(f"Refusing to overwrite: {C0}; use resume-c0 --run")
+            if args.stage.startswith("select-") and not (C0/"completed.json").is_file():
+                raise ValueError(f"Longformer C0 has not finished: {C0}")
             if args.stage == "evaluate-b0":
                 out = Path(opts[-1])
                 marker = out/"longformer_b0_completed.json"
